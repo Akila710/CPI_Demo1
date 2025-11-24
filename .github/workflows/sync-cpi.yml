@@ -1,0 +1,30 @@
+name: Sync CPI Artifacts to GitHub
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 14 * * *" # Runs daily at 2:30 PM UTC
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    container:
+      image: engswee/flashpipe:latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync all CPI artifacts
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+
+          # OPTIONAL: sync only one package
+          # package-id: Demo
+
+          git-commit-msg: "Automated sync from CPI tenant"
+          dir-artifacts-relative: cpi-artifacts
+          sync-package-details: true
