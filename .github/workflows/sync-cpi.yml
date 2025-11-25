@@ -24,7 +24,7 @@ jobs:
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
 
-          # IMPORTANT: You must provide your package ID here
+
           package-id: Demo      
 
           # folder where artifacts will be saved inside repo
@@ -33,5 +33,5 @@ jobs:
           # Commit message
           git-commit-msg: "Automated sync from CPI tenant"
 
-          # Optional but recommended
+         
           sync-package-details: true
