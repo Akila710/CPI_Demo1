@@ -25,7 +25,7 @@ jobs:
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
 
 
-          package-id: Demo      
+          package-id: POC-2     
 
           # folder where artifacts will be saved inside repo
           dir-artifacts-relative: cpi-artifacts
