@@ -24,7 +24,7 @@ jobs:
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
 
-          package-id: POC-2
+          package-id: POC2
     
 
           # folder where artifacts will be saved inside repo
