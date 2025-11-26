@@ -7,56 +7,32 @@ jobs:
   backup:
     runs-on: ubuntu-latest
 
+    container:
+      image: engswee/flashpipe:latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Sync ALL CPI packages (FlashPipe)
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+
+          # 🔥 NO PACKAGE-ID → FlashPipe auto-syncs entire tenant
+          # DO NOT ADD package-id
+
+          dir-artifacts-relative: cpi-artifacts
+          sync-package-details: true
+          git-commit-msg: "Full CPI Tenant Backup"
+
+      - name: Commit changes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl unzip
-
-      - name: Fetch ALL CPI Packages (Basic Auth)
-        env:
-          USERNAME: ${{ secrets.DEV_CLIENT_ID }}
-          PASSWORD: ${{ secrets.DEV_CLIENT_SECRET }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          mkdir -p backup
-          curl -u "$USERNAME:$PASSWORD" -s \
-            "https://${TMN_HOST}/api/v1/IntegrationPackages" \
-            -o backup/packages.json
-
-          echo "PACKAGE LIST:"
-          cat backup/packages.json | jq .
-
-      - name: Download ALL iFlows
-        env:
-          USERNAME: ${{ secrets.DEV_CLIENT_ID }}
-          PASSWORD: ${{ secrets.DEV_CLIENT_SECRET }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          mkdir -p backup/iflows
-
-          for PKG in $(jq -r '.[].Id' backup/packages.json); do
-            echo "Processing Package: $PKG"
-
-            curl -u "$USERNAME:$PASSWORD" -s \
-              "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'" \
-              -o backup/${PKG}.json
-
-            for FLOW in $(jq -r '.[].Id' backup/${PKG}.json); do
-              echo "Downloading iFlow: $FLOW"
-              curl -u "$USERNAME:$PASSWORD" -s \
-                "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
-                -o backup/iflows/${PKG}_${FLOW}.zip
-            done
-          done
-
-      - name: Commit backup
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-          git add backup
-          git commit -m "Full CPI Backup" || true
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Full Backup Completed" || echo "No changes"
           git push || true
