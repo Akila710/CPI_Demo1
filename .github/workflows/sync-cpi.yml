@@ -4,81 +4,24 @@ on:
   workflow_dispatch:
 
 jobs:
-  backup:
+  full_backup:
     runs-on: ubuntu-latest
+
+    container:
+      image: engswee/flashpipe:latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl unzip
+      - name: Full Tenant Backup – Sync ALL Packages
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+          dir-artifacts-relative: full-backup
+          sync-package-details: true
 
-      - name: Get OAuth Token
-        env:
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        run: |
-          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
-
-          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-              -u "$CLIENT_ID:$CLIENT_SECRET" \
-              -d "grant_type=client_credentials")
-
-          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
-
-          if [ -z "$TOKEN" ]; then
-            echo "Failed to generate token"
-            exit 1
-          fi
-
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-
-      - name: Fetch ALL CPI Packages
-        env:
-          TOKEN: ${{ env.TOKEN }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          mkdir -p backup
-          curl -s -H "Authorization: Bearer $TOKEN" \
-            "https://${TMN_HOST}/api/v1/IntegrationPackages" \
-            -o backup/packages.json
-
-          jq '.' backup/packages.json
-
-      - name: Download ALL iFlows
-        env:
-          TOKEN: ${{ env.TOKEN }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          mkdir -p backup/iflows
-
-          for PKG in $(jq -r '.[].Id' backup/packages.json); do
-            echo "Processing Package: $PKG"
-
-            curl -s \
-              -H "Authorization: Bearer $TOKEN" \
-              "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'" \
-              -o backup/${PKG}.json
-
-            for FLOW in $(jq -r '.[].Id' backup/${PKG}.json); do
-              echo "Downloading iFlow: $FLOW in $PKG"
-
-              curl -s \
-                -H "Authorization: Bearer $TOKEN" \
-                "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
-                -o backup/iflows/${PKG}_${FLOW}.zip
-            done
-          done
-
-      - name: Commit backup
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-
-          git add backup
-          git commit -m "Full CPI Backup" || true
-          git push || true
+          git-commit-msg: "Full CPI Tenant Backup"
