@@ -6,7 +6,6 @@ on:
       packages:
         description: "Enter package names (comma or space separated)"
         required: true
-        default: "Make, Demo"
 
 jobs:
   sync:
