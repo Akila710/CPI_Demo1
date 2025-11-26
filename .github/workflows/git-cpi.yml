@@ -1,3 +1,52 @@
+name: Deploy Single CPI Package to CPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Enter CPI Package Name (must match folder inside cpi-artifacts)"
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    container:
+      image: engswee/flashpipe:latest
+
+    steps:
+      # ----------------------------------------------------
+      # CHECKOUT REPOSITORY
+      # ----------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ----------------------------------------------------
+      # FIND ALL iFlows IN SELECTED PACKAGE
+      # ----------------------------------------------------
+      - name: Find iFlows in Package
+        id: discover
+        run: |
+          PKG="${{ github.event.inputs.package }}"
+          echo "🔍 Looking for iFlows inside: cpi-artifacts/$PKG"
+
+          if [ ! -d "cpi-artifacts/$PKG" ]; then
+            echo "❌ ERROR: Package folder not found!"
+            exit 1
+          fi
+
+          # Collect all folder names (each iFlow is a folder)
+          LIST=$(ls "cpi-artifacts/$PKG")
+
+          echo "iFlows detected:"
+          echo "$LIST"
+
+          # Make iFlow list available for deployment step
+          echo "flows=$LIST" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------
+      # DEPLOY ALL iFlows FROM THIS PACKAGE
+      # ----------------------------------------------------
       - name: Deploy iFlows to CPI
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
@@ -5,12 +54,13 @@
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
         run: |
-          PACKAGE="${{ github.event.inputs.package }}"
-          echo "Deploying into CPI Package: $PACKAGE"
+          PKG="${{ github.event.inputs.package }}"
+          echo "🚀 Deploying package: $PKG"
 
-          for IFLOW in ${{ steps.normalize.outputs.iflows }}; do
+          for IFLOW in ${{ steps.discover.outputs.flows }}; do
             echo "======================================"
-            echo "🚀 Deploying iFlow: $IFLOW"
+            echo "📦 Package: $PKG"
+            echo "🔧 Deploying iFlow: $IFLOW"
             echo "======================================"
 
             flashpipe deploy \
@@ -19,7 +69,7 @@
               --oauth-clientid "$CLIENT_ID" \
               --oauth-clientsecret "$CLIENT_SECRET" \
               --artifact-ids "$IFLOW" \
-              --dir-artifacts "cpi-artifacts/$PACKAGE/$IFLOW"
+              --dir-artifacts "cpi-artifacts/$PKG/$IFLOW"
 
-            echo "✔ Done: $IFLOW"
+            echo "✔ Successfully deployed: $IFLOW"
           done
