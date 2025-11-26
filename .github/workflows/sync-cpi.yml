@@ -53,6 +53,8 @@ jobs:
 
       - name: Commit & push
         run: |
+          cd /workspace   # IMPORTANT: Git repo is here
+
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add .
