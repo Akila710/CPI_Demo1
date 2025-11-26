@@ -1,27 +1,28 @@
-name: Fetch All CPI Packages via GitHub Action
+name: Sync All CPI Packages (CLI Direct)
 on:
   workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    # Use a specific container that has the flashpipe CLI installed
     container:
       image: engswee/flashpipe:latest
     steps:
       - uses: actions/checkout@v4
-      - name: 'Sync all artifacts from CPI'
-        uses: engswee/flashpipe-action/sync@v1
-        with:
-          # ADD THIS LINE to specify you are syncing Integration Flows (iFlows)
-          command: iflow
-          
-          # Required connection details using GitHub Secrets
-          tmn-host: ${{ secrets.DEV_TMN_HOST }}
-          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
-          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
-          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          
-          # Configuration
-          dir-artifacts-relative: cpi-artifacts
-          sync-package-details: true
-          git-commit-msg: "Automated fetch of all CPI packages (iFlows)"
+
+      - name: 'Execute FlashPipe sync iflow command directly'
+        # Run the specific CLI command needed
+        run: |
+          flashpipe sync iflow \
+            --tmn-host ${{ secrets.DEV_TMN_HOST }} \
+            --oauth-host ${{ secrets.DEV_OAUTH_HOST }} \
+            --oauth-clientid ${{ secrets.DEV_CLIENT_ID }} \
+            --oauth-clientsecret ${{ secrets.DEV_CLIENT_SECRET }} \
+            --dir-artifacts cpi-artifacts \
+            --sync-package-details \
+            --git-commit-msg "Automated sync: fetched all CPI packages and iFlows via direct CLI"
+
+      # The checkout action needs to be rerun *after* the flashpipe command 
+      # so that subsequent steps (if any) can see the new files.
+      # The commit happens automatically within the 'flashpipe sync iflow' command itself.
