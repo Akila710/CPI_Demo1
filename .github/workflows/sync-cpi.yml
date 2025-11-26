@@ -1,28 +1,31 @@
-name: Sync All CPI Packages (CLI Direct)
+name: Full CPI Tenant Backup
+
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "30 14 * * *"   # Daily at 14:30 UTC (optional)
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Use a specific container that has the flashpipe CLI installed
+
     container:
       image: engswee/flashpipe:latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: 'Execute FlashPipe sync iflow command directly'
-        # Run the specific CLI command needed
-        run: |
-          flashpipe sync iflow \
-            --tmn-host ${{ secrets.DEV_TMN_HOST }} \
-            --oauth-host ${{ secrets.DEV_OAUTH_HOST }} \
-            --oauth-clientid ${{ secrets.DEV_CLIENT_ID }} \
-            --oauth-clientsecret ${{ secrets.DEV_CLIENT_SECRET }} \
-            --dir-artifacts cpi-artifacts \
-            --sync-package-details \
-            --git-commit-msg "Automated sync: fetched all CPI packages and iFlows via direct CLI"
+      - name: Sync ALL CPI artifacts using FlashPipe
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+          
+          dir-artifacts-relative: cpi-backup
 
-      # The checkout action needs to be rerun *after* the flashpipe command 
-      # so that subsequent steps (if any) can see the new files.
-      # The commit happens automatically within the 'flashpipe sync iflow' command itself.
+          git-commit-msg: "Full CPI Tenant Backup"
+
+          sync-package-details: true
