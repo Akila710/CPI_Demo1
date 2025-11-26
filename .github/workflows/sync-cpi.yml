@@ -62,3 +62,5 @@ jobs:
 
             echo "✔ Completed: $PKG"
           done
+          git-commit-msg: "Sync package ${{ github.event.inputs.package }} from CPI"
+          sync-package-details: true
