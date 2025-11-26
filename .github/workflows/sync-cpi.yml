@@ -2,8 +2,6 @@ name: Full CPI Tenant Backup
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "30 14 * * *"   # Daily at 14:30 UTC (optional)
 
 jobs:
   sync:
@@ -13,16 +11,16 @@ jobs:
       image: engswee/flashpipe:latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Sync ALL CPI artifacts using FlashPipe
+      - name: Sync ALL CPI packages
         uses: engswee/flashpipe-action/sync@v1
         with:
           tmn-host: ${{ secrets.DEV_TMN_HOST }}
           oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          dir-artifacts-relative: cpi-backup
+          dir-artifacts-relative: all-packages
           sync-package-details: true
           git-commit-msg: "Full CPI Backup"
