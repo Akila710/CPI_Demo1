@@ -12,12 +12,6 @@ jobs:
   sync:
     runs-on: ubuntu-latest
 
-    container:
-      image: engswee/flashpipe:latest
-      options: --workdir /workspace
-      volumes:
-        - ${{ github.workspace }}:/workspace
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,32 +23,38 @@ jobs:
           CLEANED=$(echo "$RAW" | tr ',' ' ')
           echo "packages=$CLEANED" >> $GITHUB_OUTPUT
 
-      - name: Sync selected packages
+      - name: Run FlashPipe inside Docker (with repo mounted!!)
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
         run: |
-          for PKG in ${{ steps.normalize.outputs.packages }}; do
-            echo "➡ Syncing CPI Package: $PKG"
+          # Run FlashPipe container with GITHUB WORKSPACE mounted
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            -e TMN_HOST="$TMN_HOST" \
+            -e OAUTH_HOST="$OAUTH_HOST" \
+            -e CLIENT_ID="$CLIENT_ID" \
+            -e CLIENT_SECRET="$CLIENT_SECRET" \
+            engswee/flashpipe:latest \
+            sh -c '
+              for PKG in ${{ steps.normalize.outputs.packages }}; do
+                echo "➡ Syncing $PKG..."
+                flashpipe sync \
+                  --tmn-host "$TMN_HOST" \
+                  --oauth-host "$OAUTH_HOST" \
+                  --oauth-clientid "$CLIENT_ID" \
+                  --oauth-clientsecret "$CLIENT_SECRET" \
+                  --package-id "$PKG" \
+                  --dir-artifacts "cpi-artifacts/$PKG" \
+                  --sync-package-details
+              done
+            '
 
-            flashpipe sync \
-              --tmn-host "$TMN_HOST" \
-              --oauth-host "$OAUTH_HOST" \
-              --oauth-clientid "$CLIENT_ID" \
-              --oauth-clientsecret "$CLIENT_SECRET" \
-              --package-id "$PKG" \
-              --dir-artifacts "cpi-artifacts/$PKG" \
-              --sync-package-details
-
-            echo "✔ Completed: $PKG"
-          done
-
-      - name: Commit & push
+      - name: Commit & push changes
         run: |
-          cd /workspace   # IMPORTANT: Git repo is here
-
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add .
