@@ -19,14 +19,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Normalize package input → Make comma or space separated values into a list
       - name: Normalize package list
         id: normalize
         run: |
-          # Replace commas with spaces → creates clean list
-          CLEANED="$(echo '${{ github.event.inputs.packages }}' | tr ',' ' ')"
-          echo "CLEANED=$CLEANED"
+          CLEANED="$(echo '${{ github.event.inputs.packages }}' | tr ',' ' ' | xargs)"
           echo "packages=$CLEANED" >> $GITHUB_OUTPUT
 
+      # Loop through each package
       - name: Sync selected packages
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
@@ -49,10 +49,14 @@ jobs:
             echo "✔ Completed: $PKG"
           done
 
+      # Commit and push changes
       - name: Commit & push
         run: |
+          cd "$GITHUB_WORKSPACE"
+
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add .
           git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes"
           git push || true
