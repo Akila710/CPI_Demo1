@@ -1,64 +1,96 @@
-name: Sync All CPI Packages Automatically
+name: Full CPI Tenant Backup
 
 on:
   workflow_dispatch:
 
 jobs:
-  sync_all:
+  backup:
     runs-on: ubuntu-latest
 
     container:
       image: engswee/flashpipe:latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # STEP 1 — Fetch all package IDs from CPI
-      - name: List CPI Packages
-        id: list_packages
+      # STEP 1 — Get OAuth Token
+      - name: Generate OAuth Token
+        id: token
+        env:
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
         run: |
-          echo "Fetching package list..."
+          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
 
-          flashpipe list-packages \
-            --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
-            --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
-            --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
-            --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
-            > packages.txt
+          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -u "$CLIENT_ID:$CLIENT_SECRET" \
+            -d "grant_type=client_credentials")
 
-          echo "Packages found:"
-          cat packages.txt
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
 
-          # Make packages available for next steps
-          echo "PKGS=$(paste -sd ' ' packages.txt)" >> $GITHUB_OUTPUT
+          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
+            echo "❌ FAILED: Could not generate OAuth token"
+            echo "$RESPONSE"
+            exit 1
+          fi
 
-      # STEP 2 — Sync each package individually
-      - name: Sync Each Package
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "Access token generated"
+
+      # STEP 2 — Fetch all package IDs
+      - name: Fetch List of CPI Packages
+        id: fetch_pkgs
+        env:
+          TOKEN: ${{ env.TOKEN }}
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
         run: |
-          for PKG in ${{ steps.list_packages.outputs.PKGS }}; do
+          echo "Fetching packages..."
+          curl -s \
+            -H "Authorization: Bearer $TOKEN" \
+            "https://${TMN_HOST}/api/v1/IntegrationPackages" \
+            -o packages.json
+
+          echo "Package list:"
+          cat packages.json | jq .
+
+          PKGS=$(jq -r '.d.results[].Id' packages.json)
+
+          echo "PACKAGES=$PKGS"
+          echo "PKG_LIST=$PKGS" >> $GITHUB_OUTPUT
+
+      # STEP 3 — Sync each package using FlashPipe
+      - name: Sync All Packages
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          for PKG in ${{ steps.fetch_pkgs.outputs.PKG_LIST }}; do
             echo "=============================="
-            echo "➡ Syncing Package: $PKG"
+            echo "➡ Syncing package: $PKG"
             echo "=============================="
 
             flashpipe sync \
-              --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
-              --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
-              --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
-              --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
+              --tmn-host "$TMN_HOST" \
+              --oauth-host "$OAUTH_HOST" \
+              --oauth-clientid "$CLIENT_ID" \
+              --oauth-clientsecret "$CLIENT_SECRET" \
               --package-id "$PKG" \
               --dir-artifacts "cpi-artifacts/$PKG" \
               --sync-package-details
 
-            echo "✔ Completed: $PKG"
+            echo "✔ DONE: $PKG"
           done
 
-      # STEP 3 — Commit & Push results
-      - name: Commit & Push Changes
+      # STEP 4 — Commit & push results
+      - name: Commit Backup
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           git add .
-          git commit -m "Full Sync of All CPI Packages" || echo "No changes to commit"
+          git commit -m "Full CPI Backup" || echo "No changes"
           git push || true
