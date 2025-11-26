@@ -22,6 +22,7 @@ jobs:
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
           dir-artifacts-relative: cpi-artifacts
+          package-id: Demo
           sync-package-details: true
           git-commit-msg: "Full CPI Tenant Backup"
 
