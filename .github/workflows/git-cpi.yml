@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Enter CPI Package Name (exact name)"
+        description: "Enter CPI Package Name"
         required: true
       iflows:
-        description: "Enter iFlow IDs (comma or space separated). Use 'all' to deploy all iFlows in the package."
+        description: "iFlow IDs (comma/space) OR 'all'"
         required: true
         default: "all"
 
@@ -26,16 +26,18 @@ jobs:
         id: normalize
         run: |
           RAW="${{ github.event.inputs.iflows }}"
+
           if [ "$RAW" = "all" ]; then
-            # Find all iFlow folders inside the package directory
-            LIST=$(ls cpi-artifacts/${{ github.event.inputs.package }} )
+            # extract all iFlow dirs and convert to single-line space-separated list
+            LIST=$(ls cpi-artifacts/${{ github.event.inputs.package }} | tr '\n' ' ')
           else
             LIST=$(echo "$RAW" | tr ',' ' ')
           fi
+
           echo "iflows=$LIST" >> $GITHUB_OUTPUT
           echo "Deploying iFlows: $LIST"
 
-      - name: Deploy iFlows to CPI
+      - name: Deploy the iFlows to CPI
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
@@ -57,3 +59,7 @@ jobs:
               --oauth-clientsecret "$CLIENT_SECRET" \
               --package-id "$PACKAGE" \
               --artifact-ids "$IFLOW" \
+              --dir-artifacts "cpi-artifacts/$PACKAGE/$IFLOW"
+
+            echo "✔ Done: $IFLOW"
+          done
