@@ -1,0 +1,59 @@
+name: Deploy CPI iFlows to CPI Tenant
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Enter CPI Package Name (exact name)"
+        required: true
+      iflows:
+        description: "Enter iFlow IDs (comma or space separated). Use 'all' to deploy all iFlows in the package."
+        required: true
+        default: "all"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    container:
+      image: engswee/flashpipe:latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Normalize iFlow list
+        id: normalize
+        run: |
+          RAW="${{ github.event.inputs.iflows }}"
+          if [ "$RAW" = "all" ]; then
+            # Find all iFlow folders inside the package directory
+            LIST=$(ls cpi-artifacts/${{ github.event.inputs.package }} )
+          else
+            LIST=$(echo "$RAW" | tr ',' ' ')
+          fi
+          echo "iflows=$LIST" >> $GITHUB_OUTPUT
+          echo "Deploying iFlows: $LIST"
+
+      - name: Deploy iFlows to CPI
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          PACKAGE="${{ github.event.inputs.package }}"
+          echo "Deploying into CPI Package: $PACKAGE"
+
+          for IFLOW in ${{ steps.normalize.outputs.iflows }}; do
+            echo "======================================"
+            echo "🚀 Deploying iFlow: $IFLOW"
+            echo "======================================"
+
+            flashpipe deploy \
+              --tmn-host "$TMN_HOST" \
+              --oauth-host "$OAUTH_HOST" \
+              --oauth-clientid "$CLIENT_ID" \
+              --oauth-clientsecret "$CLIENT_SECRET" \
+              --package-id "$PACKAGE" \
+              --artifact-ids "$IFLOW" \
