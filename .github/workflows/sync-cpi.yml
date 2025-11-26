@@ -1,107 +1,38 @@
-name: Full CPI Tenant Backup
-
+name: Sync Specific CPI Package
+ 
 on:
   workflow_dispatch:
-
+    inputs:
+      package:
+        description: "Enter CPI package name"
+        required: true
+        default: "Make"
+ 
 jobs:
-  backup:
+  sync:
     runs-on: ubuntu-latest
-
+ 
     container:
       image: engswee/flashpipe:latest
-
+ 
     steps:
-
-      - name: Install required tools inside container
-        run: |
-          apk update
-          apk add curl jq
-
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # STEP 1 — Get OAuth Token
-      - name: Get OAuth Token
-        id: token
-        env:
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        run: |
-          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
-
-          echo "Requesting token from: $TOKEN_URL"
-
-          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-              -u "$CLIENT_ID:$CLIENT_SECRET" \
-              -d "grant_type=client_credentials")
-
-          echo "Response: $RESPONSE"
-
-          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
-
-          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "❌ Failed to generate OAuth token"
-            exit 1
-          fi
-
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-          echo "Access token generated"
-
-      # STEP 2 — Fetch all package IDs
-      - name: Fetch package list
-        id: fetch_pkgs
-        env:
-          TOKEN: ${{ env.TOKEN }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          echo "Fetching packages from $TMN_HOST"
-
-          curl -s \
-            -H "Authorization: Bearer $TOKEN" \
-            "https://${TMN_HOST}/api/v1/IntegrationPackages" \
-            -o packages.json
-
-          echo "Package JSON:"
-          cat packages.json | jq .
-
-          PKGS=$(jq -r '.d.results[].Id' packages.json)
-
-          echo "Found packages: $PKGS"
-
-          echo "PKG_LIST=$PKGS" >> $GITHUB_OUTPUT
-
-      # STEP 3 — Sync all packages using FlashPipe
-      - name: Sync ALL packages
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-        run: |
-          for PKG in ${{ steps.fetch_pkgs.outputs.PKG_LIST }}; do
-            echo "===================================="
-            echo "➡ Syncing package: $PKG"
-            echo "===================================="
-
-            flashpipe sync \
-              --tmn-host "$TMN_HOST" \
-              --oauth-host "$OAUTH_HOST" \
-              --oauth-clientid "$CLIENT_ID" \
-              --oauth-clientsecret "$CLIENT_SECRET" \
-              --package-id "$PKG" \
-              --dir-artifacts "cpi-artifacts/$PKG" \
-              --sync-package-details
-
-            echo "✔ Package synced: $PKG"
-          done
-
-      # STEP 4 — Commit to GitHub
-      - name: Commit backup
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          git add cpi-artifacts
-          git commit -m "Full CPI Backup" || echo "No changes"
-          git push || true
+ 
+      - name: Sync CPI artifacts for selected package
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+ 
+          # Package to sync
+          package-id: ${{ github.event.inputs.package }}
+ 
+          # Folder structure
+          dir-artifacts-relative: cpi-artifacts/${{ github.event.inputs.package }}
+ 
+          git-commit-msg: "Sync package ${{ github.event.inputs.package }} from CPI"
+ 
+          sync-package-details: true
