@@ -14,6 +14,9 @@ jobs:
 
     container:
       image: engswee/flashpipe:latest
+      options: --workdir /workspace
+      volumes:
+        - ${{ github.workspace }}:/workspace
 
     steps:
       - name: Checkout repository
@@ -24,7 +27,6 @@ jobs:
         run: |
           RAW="${{ github.event.inputs.packages }}"
           CLEANED=$(echo "$RAW" | tr ',' ' ')
-          echo "Normalized Packages: $CLEANED"
           echo "packages=$CLEANED" >> $GITHUB_OUTPUT
 
       - name: Sync selected packages
@@ -35,9 +37,7 @@ jobs:
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
         run: |
           for PKG in ${{ steps.normalize.outputs.packages }}; do
-            echo "========================================"
             echo "➡ Syncing CPI Package: $PKG"
-            echo "========================================"
 
             flashpipe sync \
               --tmn-host "$TMN_HOST" \
@@ -51,13 +51,10 @@ jobs:
             echo "✔ Completed: $PKG"
           done
 
-      - name: Commit & push changes
+      - name: Commit & push
         run: |
-          cd "$GITHUB_WORKSPACE"
-
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
           git add .
-          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes to commit"
+          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes"
           git push || true
