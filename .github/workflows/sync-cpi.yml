@@ -23,9 +23,6 @@ jobs:
           oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          
           dir-artifacts-relative: cpi-backup
-
-          git-commit-msg: "Full CPI Tenant Backup"
-
           sync-package-details: true
+          git-commit-msg: "Full CPI Backup"
