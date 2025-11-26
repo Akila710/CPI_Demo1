@@ -16,42 +16,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl unzip
 
-      - name: Get OAuth Token
+      - name: Fetch ALL CPI Packages (Basic Auth)
         env:
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        run: |
-          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
-
-          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-              -u "$CLIENT_ID:$CLIENT_SECRET" \
-              -d "grant_type=client_credentials")
-
-          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
-
-          if [ -z "$TOKEN" ]; then
-            echo "Failed to generate token"
-            exit 1
-          fi
-
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-
-      - name: Fetch ALL CPI Packages
-        env:
-          TOKEN: ${{ env.TOKEN }}
+          USERNAME: ${{ secrets.DEV_CLIENT_ID }}
+          PASSWORD: ${{ secrets.DEV_CLIENT_SECRET }}
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
         run: |
           mkdir -p backup
-          curl -s -H "Authorization: Bearer $TOKEN" \
+          curl -u "$USERNAME:$PASSWORD" -s \
             "https://${TMN_HOST}/api/v1/IntegrationPackages" \
             -o backup/packages.json
 
-          jq '.' backup/packages.json
+          echo "PACKAGE LIST:"
+          cat backup/packages.json | jq .
 
       - name: Download ALL iFlows
         env:
-          TOKEN: ${{ env.TOKEN }}
+          USERNAME: ${{ secrets.DEV_CLIENT_ID }}
+          PASSWORD: ${{ secrets.DEV_CLIENT_SECRET }}
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
         run: |
           mkdir -p backup/iflows
@@ -59,16 +41,13 @@ jobs:
           for PKG in $(jq -r '.[].Id' backup/packages.json); do
             echo "Processing Package: $PKG"
 
-            curl -s \
-              -H "Authorization: Bearer $TOKEN" \
+            curl -u "$USERNAME:$PASSWORD" -s \
               "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'" \
               -o backup/${PKG}.json
 
             for FLOW in $(jq -r '.[].Id' backup/${PKG}.json); do
-              echo "Downloading iFlow: $FLOW in $PKG"
-
-              curl -s \
-                -H "Authorization: Bearer $TOKEN" \
+              echo "Downloading iFlow: $FLOW"
+              curl -u "$USERNAME:$PASSWORD" -s \
                 "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
                 -o backup/iflows/${PKG}_${FLOW}.zip
             done
@@ -78,7 +57,6 @@ jobs:
         run: |
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
-
           git add backup
           git commit -m "Full CPI Backup" || true
           git push || true
