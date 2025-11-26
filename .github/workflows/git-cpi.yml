@@ -1,43 +1,4 @@
-name: Deploy CPI iFlows to CPI Tenant
-
-on:
-  workflow_dispatch:
-    inputs:
-      package:
-        description: "Enter CPI Package Name"
-        required: true
-      iflows:
-        description: "iFlow IDs (comma/space) OR 'all'"
-        required: true
-        default: "all"
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    container:
-      image: engswee/flashpipe:latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Normalize iFlow list
-        id: normalize
-        run: |
-          RAW="${{ github.event.inputs.iflows }}"
-
-          if [ "$RAW" = "all" ]; then
-            # extract all iFlow dirs and convert to single-line space-separated list
-            LIST=$(ls cpi-artifacts/${{ github.event.inputs.package }} | tr '\n' ' ')
-          else
-            LIST=$(echo "$RAW" | tr ',' ' ')
-          fi
-
-          echo "iflows=$LIST" >> $GITHUB_OUTPUT
-          echo "Deploying iFlows: $LIST"
-
-      - name: Deploy the iFlows to CPI
+      - name: Deploy iFlows to CPI
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
@@ -57,7 +18,6 @@ jobs:
               --oauth-host "$OAUTH_HOST" \
               --oauth-clientid "$CLIENT_ID" \
               --oauth-clientsecret "$CLIENT_SECRET" \
-              --package-id "$PACKAGE" \
               --artifact-ids "$IFLOW" \
               --dir-artifacts "cpi-artifacts/$PACKAGE/$IFLOW"
 
