@@ -1,44 +1,27 @@
 name: Fetch All CPI Packages via GitHub Action
 on:
   workflow_dispatch:
-    inputs:
-      logLevel:
-        description: 'Log level'
-        required: true
-        default: 'warning'
-        type: choice
-        options:
-        - info
-        - warning
-        - debug
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    # Use a container with FlashPipe and required dependencies pre-installed
     container:
       image: engswee/flashpipe:latest
     steps:
-      # Step 1: Checkout the repository code
       - uses: actions/checkout@v4
-
-      # Step 2: Use the flashpipe-action to connect to CPI and sync content
       - name: 'Sync all artifacts from CPI'
-        # The 'sync' action downloads artifacts and prepares them for Git commit
         uses: engswee/flashpipe-action/sync@v1
         with:
+          # ADD THIS LINE to specify you are syncing Integration Flows (iFlows)
+          command: iflow
+          
           # Required connection details using GitHub Secrets
           tmn-host: ${{ secrets.DEV_TMN_HOST }}
           oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
           
-          # Configuration for where to store the files locally within the runner
+          # Configuration
           dir-artifacts-relative: cpi-artifacts
-          # Fetch all package details
           sync-package-details: true
-          # Add a commit message as the action automatically commits new/changed files
-          git-commit-msg: "Automated fetch of all CPI packages"
-
-      # Optional: You can add further steps here to process the fetched files 
-      # once they are in the repository, e.g., linting or deployment checks.
+          git-commit-msg: "Automated fetch of all CPI packages (iFlows)"
