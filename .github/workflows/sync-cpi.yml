@@ -21,10 +21,6 @@ jobs:
           oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-
-          # 🔥 NO PACKAGE-ID → FlashPipe auto-syncs entire tenant
-          # DO NOT ADD package-id
-
           dir-artifacts-relative: cpi-artifacts
           sync-package-details: true
           git-commit-msg: "Full CPI Tenant Backup"
