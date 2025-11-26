@@ -23,10 +23,10 @@ jobs:
       - name: 'Sync FlashPipeDemo artifacts'
         uses: engswee/flashpipe-action/sync@v1
         with:
-          tmn-host: dummy.hana.ondemand.com
-          oauth-host: dummy.authentication.eu10.hana.ondemand.com
+          tmn-host: ${{ secrets.DEV_TMN_HOST }}
+          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
           package-id: Demo
           target: tenant
-          dir-artifacts-relative: TEST
+          dir-artifacts-relative: Test2
