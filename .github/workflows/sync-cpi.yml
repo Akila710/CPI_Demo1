@@ -16,18 +16,9 @@ jobs:
       image: engswee/flashpipe:latest
 
     steps:
-      # -----------------------------
-      # CHECKOUT REPOSITORY
-      # -----------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -----------------------------
-      # NORMALIZE PACKAGE LIST
-      # Converts:
-      #   "Demo, POC2" → Demo POC2
-      #   "Demo POC2"  → Demo POC2
-      # -----------------------------
       - name: Normalize package list
         id: normalize
         run: |
@@ -36,9 +27,6 @@ jobs:
           echo "Normalized Packages: $CLEANED"
           echo "packages=$CLEANED" >> $GITHUB_OUTPUT
 
-      # -----------------------------
-      # SYNC MULTIPLE PACKAGES
-      # -----------------------------
       - name: Sync selected packages
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
@@ -62,5 +50,14 @@ jobs:
 
             echo "✔ Completed: $PKG"
           done
-          git-commit-msg: "Sync package ${{ github.event.inputs.package }} from CPI"
-          sync-package-details: true
+
+      - name: Commit & push changes
+        run: |
+          cd "$GITHUB_WORKSPACE"
+
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add .
+          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes to commit"
+          git push || true
