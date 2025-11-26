@@ -1,63 +1,84 @@
-name: Sync any artifact from tenant
+name: Full CPI Tenant Backup
 
 on:
   workflow_dispatch:
-    inputs:
-      packageId:
-        description: 'Package ID'
-        required: true
-      directory:
-        description: 'Target artifact directory (relative from Git repository root)'
-        required: false
-      includedIds:
-        description: 'Included Ids (optional)'
-        required: false
-      excludedIds:
-        description: 'Excluded Ids (optional)'
-        required: false
-      draft:
-        description: 'Draft handling'
-        type: choice
-        options:
-          - SKIP
-          - ADD
-          - ERROR
-        required: false
-      dirNaming:
-        description: 'Naming convention for artifact directories'
-        required: false
-        type: choice
-        options:
-          - ID
-          - NAME
-      syncPackageDetails:
-        description: "Sync package details"
-        type: boolean
-        required: false
-      message:
-        description: 'Commit message (optional)'
-        required: false
+
 jobs:
-  sync:
+  backup:
     runs-on: ubuntu-latest
-    container:
-      image: engswee/flashpipe:latest
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: 'Sync any artifact'
-      uses: engswee/flashpipe-action/sync@v1
-      with:
-        tmn-host: ${{ secrets.DEV_TMN_HOST }}
-        oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
-        oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
-        oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-        package-id: ${{ github.event.inputs.packageId }}
-        dir-artifacts-relative: ${{ github.event.inputs.directory }}
-        dir-naming-type: ${{ github.event.inputs.dirNaming }}
-        draft-handling: ${{ github.event.inputs.draft }}
-        ids-include: ${{ github.event.inputs.includedIds }}
-        ids-exclude: ${{ github.event.inputs.excludedIds }}
-        git-commit-msg: ${{ github.event.inputs.message }}
-        sync-package-details: ${{ github.event.inputs.syncPackageDetails }}
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl unzip
+
+      - name: Get OAuth Token
+        env:
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+        run: |
+          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
+
+          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+              -u "$CLIENT_ID:$CLIENT_SECRET" \
+              -d "grant_type=client_credentials")
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+
+          if [ -z "$TOKEN" ]; then
+            echo "Failed to generate token"
+            exit 1
+          fi
+
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+
+      - name: Fetch ALL CPI Packages
+        env:
+          TOKEN: ${{ env.TOKEN }}
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+        run: |
+          mkdir -p backup
+          curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://${TMN_HOST}/api/v1/IntegrationPackages" \
+            -o backup/packages.json
+
+          jq '.' backup/packages.json
+
+      - name: Download ALL iFlows
+        env:
+          TOKEN: ${{ env.TOKEN }}
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+        run: |
+          mkdir -p backup/iflows
+
+          for PKG in $(jq -r '.[].Id' backup/packages.json); do
+            echo "Processing Package: $PKG"
+
+            curl -s \
+              -H "Authorization: Bearer $TOKEN" \
+              "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'" \
+              -o backup/${PKG}.json
+
+            for FLOW in $(jq -r '.[].Id' backup/${PKG}.json); do
+              echo "Downloading iFlow: $FLOW in $PKG"
+
+              curl -s \
+                -H "Authorization: Bearer $TOKEN" \
+                "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
+                -o backup/iflows/${PKG}_${FLOW}.zip
+            done
+          done
+
+      - name: Commit backup
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+          git add backup
+          git commit -m "Full CPI Backup" || true
+          git push || true
