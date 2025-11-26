@@ -12,39 +12,40 @@ jobs:
   sync:
     runs-on: ubuntu-latest
 
-    container:
-      image: engswee/flashpipe:latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Normalize package input → Make comma or space separated values into a list
       - name: Normalize package list
         id: normalize
         run: |
           CLEANED="$(echo '${{ github.event.inputs.packages }}' | tr ',' ' ' | xargs)"
           echo "packages=$CLEANED" >> $GITHUB_OUTPUT
 
-      # Loop through each package
-      - name: Sync selected packages
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+      - name: Sync packages using FlashPipe (Docker)
         run: |
           for PKG in ${{ steps.normalize.outputs.packages }}; do
-            echo "➡ Syncing package: $PKG"
+            echo "➡ Syncing $PKG"
+            docker run --rm \
+              -v "$GITHUB_WORKSPACE:/workspace" \
+              engswee/flashpipe:latest \
+              flashpipe sync \
+                --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
+                --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
+                --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
+                --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
+                --package-id "$PKG" \
+                --dir-artifacts "/workspace/cpi-artifacts/$PKG" \
+                --sync-package-details
+          done
 
-            flashpipe sync \
-              --tmn-host "$TMN_HOST" \
-              --oauth-host "$OAUTH_HOST" \
-              --oauth-clientid "$CLIENT_ID" \
-              --oauth-clientsecret "$CLIENT_SECRET" \
-              --package-id "$PKG" \
-              --dir-artifacts "cpi-artifacts/$PKG" \
-              --sync-package-details
+      - name: Commit & push
+        run: |
+          cd "$GITHUB_WORKSPACE"
 
-              git-commit-msg: "Sync package ${{ github.event.inputs.package }} from CPI"
-              sync-package-details: true
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add .
+          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes"
+          git push || true
