@@ -21,6 +21,7 @@ jobs:
           oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+          target: tenant
           dir-artifacts-relative: full-backup
           sync-package-details: true
 
