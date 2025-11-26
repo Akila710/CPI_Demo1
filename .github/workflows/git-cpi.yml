@@ -1,76 +1,32 @@
-name: Deploy CPI iFlows to CPI
-
+name: Sync FlashPipe Demo Package Artifacts to Tenant
 on:
   workflow_dispatch:
-    inputs:
-      package:
-        description: "CPI package name"
-        required: true
-      iflows:
-        description: "iFlow IDs (comma or space separated) or 'all'"
-        required: true
-        default: "all"
 
 jobs:
-  deploy:
+  sync:
     runs-on: ubuntu-latest
-    
     container:
       image: engswee/flashpipe:latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Detect iFlows
-        id: detect
-        run: |
-          PKG="${{ github.event.inputs.package }}"
+      - name: 'Sync package to remote'
+        uses: engswee/flashpipe-action/update/package@v1
+        with:
+          tmn-host: dummy.hana.ondemand.com
+          oauth-host: dummy.authentication.eu10.hana.ondemand.com
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+          package-file-relative: FlashPipe Demo/FlashPipeDemo.json
 
-          echo "📦 Package: $PKG"
-
-          if [ ! -d "cpi-artifacts/$PKG" ]; then
-            echo "❌ ERROR: Package folder not found!"
-            exit 1
-          fi
-
-          RAW="${{ github.event.inputs.iflows }}"
-
-          if [ "$RAW" = "all" ]; then
-            LIST=$(ls "cpi-artifacts/$PKG")
-          else
-            LIST=$(echo "$RAW" | tr ',' ' ')
-          fi
-
-          LIST_ONE=$(echo "$LIST" | tr '\n' ' ')
-          echo "flows=$LIST_ONE" >> $GITHUB_OUTPUT
-
-          echo "Found iFlows: $LIST_ONE"
-
-      - name: Deploy iFlows to CPI
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-        run: |
-          PKG="${{ github.event.inputs.package }}"
-          FLOWS="${{ steps.detect.outputs.flows }}"
-
-          echo "🚀 Deploying to CPI Package: $PKG"
-
-          for IFLOW in $FLOWS; do
-            echo "================================="
-            echo "🚀 Deploying iFlow ID: $IFLOW"
-            echo "================================="
-
-            flashpipe deploy \
-              --tmn-host "$TMN_HOST" \
-              --oauth-host "$OAUTH_HOST" \
-              --oauth-clientid "$CLIENT_ID" \
-              --oauth-clientsecret "$CLIENT_SECRET" \
-              --artifact-ids "$IFLOW" \
-              --artifact-type Integration
-
-            echo "✔ Deployment complete: $IFLOW"
-          done
+      - name: 'Sync FlashPipeDemo artifacts'
+        uses: engswee/flashpipe-action/sync@v1
+        with:
+          tmn-host: dummy.hana.ondemand.com
+          oauth-host: dummy.authentication.eu10.hana.ondemand.com
+          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
+          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
+          package-id: Demo
+          target: tenant
+          dir-artifacts-relative: TEST
