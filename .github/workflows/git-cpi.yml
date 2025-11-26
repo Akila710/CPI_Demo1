@@ -18,7 +18,7 @@ jobs:
           oauth-host: dummy.authentication.eu10.hana.ondemand.com
           oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
           oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          package-file-relative: FlashPipe Demo/FlashPipeDemo.json
+          package-file-relative: FlashPipe Demo/Demo.json
 
       - name: 'Sync FlashPipeDemo artifacts'
         uses: engswee/flashpipe-action/sync@v1
