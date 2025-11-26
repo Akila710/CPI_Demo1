@@ -1,51 +1,64 @@
-name: Sync Multiple CPI Packages
+name: Sync All CPI Packages Automatically
 
 on:
   workflow_dispatch:
-    inputs:
-      packages:
-        description: "Enter package names (comma or space separated)"
-        required: true
-        default: "Make, Demo"
 
 jobs:
-  sync:
+  sync_all:
     runs-on: ubuntu-latest
+
+    container:
+      image: engswee/flashpipe:latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Normalize package list
-        id: normalize
+      # STEP 1 — Fetch all package IDs from CPI
+      - name: List CPI Packages
+        id: list_packages
         run: |
-          CLEANED="$(echo '${{ github.event.inputs.packages }}' | tr ',' ' ' | xargs)"
-          echo "packages=$CLEANED" >> $GITHUB_OUTPUT
+          echo "Fetching package list..."
 
-      - name: Sync packages using FlashPipe (Docker)
+          flashpipe list-packages \
+            --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
+            --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
+            --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
+            --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
+            > packages.txt
+
+          echo "Packages found:"
+          cat packages.txt
+
+          # Make packages available for next steps
+          echo "PKGS=$(paste -sd ' ' packages.txt)" >> $GITHUB_OUTPUT
+
+      # STEP 2 — Sync each package individually
+      - name: Sync Each Package
         run: |
-          for PKG in ${{ steps.normalize.outputs.packages }}; do
-            echo "➡ Syncing $PKG"
-            docker run --rm \
-              -v "$GITHUB_WORKSPACE:/workspace" \
-              engswee/flashpipe:latest \
-              flashpipe sync \
-                --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
-                --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
-                --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
-                --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
-                --package-id "$PKG" \
-                --dir-artifacts "/workspace/cpi-artifacts/$PKG" \
-                --sync-package-details
+          for PKG in ${{ steps.list_packages.outputs.PKGS }}; do
+            echo "=============================="
+            echo "➡ Syncing Package: $PKG"
+            echo "=============================="
+
+            flashpipe sync \
+              --tmn-host "${{ secrets.DEV_TMN_HOST }}" \
+              --oauth-host "${{ secrets.DEV_OAUTH_HOST }}" \
+              --oauth-clientid "${{ secrets.DEV_CLIENT_ID }}" \
+              --oauth-clientsecret "${{ secrets.DEV_CLIENT_SECRET }}" \
+              --package-id "$PKG" \
+              --dir-artifacts "cpi-artifacts/$PKG" \
+              --sync-package-details
+
+            echo "✔ Completed: $PKG"
           done
 
-      - name: Commit & push
+      # STEP 3 — Commit & Push results
+      - name: Commit & Push Changes
         run: |
-          cd "$GITHUB_WORKSPACE"
-
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           git add .
-          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes"
+          git commit -m "Full Sync of All CPI Packages" || echo "No changes to commit"
           git push || true
