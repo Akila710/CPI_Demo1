@@ -1,33 +1,129 @@
-name: Sync FlashPipe Demo Package Artifacts to Tenant
-
+name: Deploy CPI Packages (Manual ID or Deploy All)
+ 
 on:
+  # Allows triggering the workflow manually with inputs
   workflow_dispatch:
-
+    inputs:
+      package:
+        # Input for single package ID (optional)
+        description: "Enter a specific Package ID to deploy (optional if 'Deploy All' is checked)"
+        required: false
+        type: string
+      deploy_all:
+        # Boolean flag to trigger mass deployment
+        description: "Check to deploy ALL packages found in the 'cpi-artifacts' directory."
+        required: true
+        type: boolean
+        default: false
+ 
 jobs:
-  sync:
+  deploy:
     runs-on: ubuntu-latest
+    # Run the entire job inside the FlashPipe Docker image
     container:
       image: engswee/flashpipe:latest
-
+ 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: 'Sync package to remote'
-        uses: engswee/flashpipe-action/update/package@v1
-        with:
-          tmn-host: ${{ secrets.DEV_TMN_HOST }}
-          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
-          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
-          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          package-file-relative: cpi-artifacts/Demo/Demo.json
-
-      - name: 'Sync FlashPipeDemo artifacts'
-        uses: engswee/flashpipe-action/sync@v1
-        with:
-          tmn-host: ${{ secrets.DEV_TMN_HOST }}
-          oauth-host: ${{ secrets.DEV_OAUTH_HOST }}
-          oauth-clientid: ${{ secrets.DEV_CLIENT_ID }}
-          oauth-clientsecret: ${{ secrets.DEV_CLIENT_SECRET }}
-          package-id: Demo
-          target: tenant
-          dir-artifacts-relative: cpi-artifacts/Demo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+ 
+      - name: Deploy Selected or All Packages
+        # Pass CPI credentials and user input flags to the script environment
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          DEPLOY_ALL: ${{ github.event.inputs.deploy_all }}
+          SINGLE_PKG: ${{ github.event.inputs.package }}
+       
+        run: |
+          echo "Starting flexible deployment..."
+         
+          # --- 1. Determine Packages to Process ---
+          PKGS_TO_DEPLOY=""
+         
+          if [ "$DEPLOY_ALL" = "true" ]; then
+            echo "Mode: Deploying ALL packages found in cpi-artifacts/."
+            # Find all subdirectories immediately under cpi-artifacts/ for 'Deploy All'
+            PKGS_TO_DEPLOY=$(find cpi-artifacts -maxdepth 1 -mindepth 1 -type d -printf "%f\n")
+            if [ -z "$PKGS_TO_DEPLOY" ]; then
+              echo "::error::No package directories found in cpi-artifacts. Exiting."
+              exit 1
+            fi
+           
+          elif [ -n "$SINGLE_PKG" ]; then
+            echo "Mode: Deploying single package: $SINGLE_PKG"
+            # Use the manually entered package ID
+            PKGS_TO_DEPLOY="$SINGLE_PKG"
+           
+          else
+            echo "::error::Please check 'Deploy All' OR provide a package ID."
+            exit 1
+          fi
+         
+          echo "Packages identified for deployment: $PKGS_TO_DEPLOY"
+         
+          # --- 2. Define Deployment Function ---
+          deploy_package() {
+            local PKG_ID=$1
+            local PACKAGE_DIR="cpi-artifacts/$PKG_ID"
+           
+            echo "=========================================================="
+            echo "➡ Processing Package: $PKG_ID"
+           
+            # Check if the folder exists in Git
+            if [ ! -d "$PACKAGE_DIR" ]; then
+              echo "::error::Package directory $PACKAGE_DIR not found in the repository. Skipping this package."
+              return 1
+            fi
+           
+            # Find all artifact subfolders (the iFlow IDs)
+            ARTIFACT_IDS=$(find "$PACKAGE_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f,")
+            ARTIFACT_IDS=${ARTIFACT_IDS%,}
+           
+            if [ -z "$ARTIFACT_IDS" ]; then
+              echo "::warning::No artifacts found in $PACKAGE_DIR. Skipping deployment for this package."
+              return 0
+            fi
+           
+            echo "   Found Artifact IDs: $ARTIFACT_IDS"
+            echo "   Executing flashpipe sync (Git -> Tenant)..."
+            echo "   WARNING: Artifacts will be deployed but remain STOPPED. Please start them manually in CPI."
+ 
+            # Execute the FlashPipe sync command (the corrected, compatible command)
+            flashpipe sync \
+              --tmn-host "$TMN_HOST" \
+              --oauth-host "$OAUTH_HOST" \
+              --oauth-clientid "$CLIENT_ID" \
+              --oauth-clientsecret "$CLIENT_SECRET" \
+              --package-id "$PKG_ID" \
+              --dir-artifacts "$PACKAGE_DIR" \
+              --sync-package-details \
+              --target "tenant"
+             
+            if [ $? -ne 0 ]; then
+                echo "::error::Deployment FAILED for package $PKG_ID. Check logs above."
+                return 1
+            fi
+           
+            echo "✅ Deployment SUCCESSFUL for package: $PKG_ID."
+            return 0
+          }
+ 
+          # --- 3. Execute Deployment ---
+          EXIT_CODE=0
+          for pkg in $PKGS_TO_DEPLOY; do
+            deploy_package "$pkg"
+            if [ $? -ne 0 ]; then
+                EXIT_CODE=1
+            fi
+          done
+ 
+          # Set overall workflow exit status
+          if [ $EXIT_CODE -ne 0 ]; then
+              echo "One or more packages failed deployment."
+          else
+              echo "All deployments completed successfully."
+          fi
+          exit $EXIT_CODEmm
