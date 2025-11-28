@@ -1,73 +1,86 @@
-name: Deploy CPI Package (Manual ID Input)
- 
+name: Sync All CPI Packages
 on:
-  # Line 5: Start of event trigger
   workflow_dispatch:
-    inputs:
-      package:
-        # Allows entering any package ID at runtime
-        description: "Enter the CPI Package ID to deploy (e.g., logan)"
-        required: true
-        type: string
- 
 jobs:
-  deploy:
+  sync:
     runs-on: ubuntu-latest
-    # Container is run for the entire job
-    container:
-      image: engswee/flashpipe:latest
- 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
- 
-      - name: Set up Environment Variables
-        id: env_setup
+      - name: Install Dependencies for CPI API Calls
         run: |
-          # Set variables for the deployment step
-          echo "PKG=${{ github.event.inputs.package }}" >> $GITHUB_ENV
-          echo "PACKAGE_DIR=cpi-artifacts/${{ github.event.inputs.package }}" >> $GITHUB_ENV
- 
-      # This step should be approximately where Line 71 might fall in a large file.
-      - name: Deploy Package & Artifacts (Compatible Version)
-        # Indent 'env' by two spaces under 'name'
+          # Install jq (JSON processor) on the GitHub Runner
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+      - name: Dynamic Fetch and Normalize Package List
+        id: normalize
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-        # Indent 'run' by two spaces under 'name'
         run: |
-          echo "Starting deployment for package: $PKG"
-         
-          # 1. Validation & Artifact ID finding
-          if [ ! -d "$PACKAGE_DIR" ]; then
-            echo "::error::Package directory $PACKAGE_DIR not found in the repository."
+          echo "🔑 Generating OAuth Token via cURL..."
+          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
+          # 1. Fetch the OAuth Token using the Runner's curl/jq
+          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
+          # Use jq for reliable JSON parsing
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Failed to retrieve access token."
+            echo "Raw Auth Response: $AUTH_RESPONSE"
             exit 1
           fi
-         
-          ARTIFACT_IDS=$(find "$PACKAGE_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f,")
-          ARTIFACT_IDS=${ARTIFACT_IDS%,}
-         
-          if [ -z "$ARTIFACT_IDS" ]; then
-            echo "::warning::No artifacts found in $PACKAGE_DIR. Nothing to deploy."
+          # 2. Fetch the Package List
+          echo "🔍 Fetching package list from tenant..."
+          API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
+          PACKAGE_RESPONSE=$(curl -s -X GET "$API_URL" \
+            -H "Authorization: Bearer $TOKEN")
+          # Use jq to get all 'Id' values and join them with spaces
+          PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" | jq -r ".d.results[].Id" | tr '\n' ' ')
+          if [ -z "$PACKAGE_IDS" ]; then
+            echo "::warning::No packages found or API call failed. Check permissions."
             exit 0
           fi
-         
-          echo "Found Artifact IDs to deploy: $ARTIFACT_IDS"
-         
-          # 2. Execute the FlashPipe sync command for Deployment
-          echo "➡ Deploying package $PKG and artifacts ($ARTIFACT_IDS) to tenant..."
-          echo "WARNING: The artifact will be deployed but remain STOPPED. Please start it manually."
-         
-          flashpipe sync \
-            --tmn-host "$TMN_HOST" \
-            --oauth-host "$OAUTH_HOST" \
-            --oauth-clientid "$CLIENT_ID" \
-            --oauth-clientsecret "$CLIENT_SECRET" \
-            --package-id "$PKG" \
-            --dir-artifacts "$PACKAGE_DIR" \
-            --sync-package-details \
-            --target "tenant"
-         
-          echo "Deployment command successfully executed."
+          echo "✅ Found packages: $PACKAGE_IDS"
+          # Set the output variable for the next step to use
+          echo "packages=$PACKAGE_IDS" >> $GITHUB_OUTPUT
+      - name: Run FlashPipe inside Docker (Sync Packages)
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            -e TMN_HOST="$TMN_HOST" \
+            -e OAUTH_HOST="$OAUTH_HOST" \
+            -e CLIENT_ID="$CLIENT_ID" \
+            -e CLIENT_SECRET="$CLIENT_SECRET" \
+            engswee/flashpipe:latest \
+            sh -c '
+              # Loop over the dynamically retrieved list
+              for PKG in ${{ steps.normalize.outputs.packages }}; do
+                echo "➡ Syncing $PKG..."
+                flashpipe sync \
+                  --tmn-host "$TMN_HOST" \
+                  --oauth-host "$OAUTH_HOST" \
+                  --oauth-clientid "$CLIENT_ID" \
+                  --oauth-clientsecret "$CLIENT_SECRET" \
+                  --package-id "$PKG" \
+                  --dir-artifacts "cpi-artifacts/$PKG" \
+                  --sync-package-details
+              done
+            '
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Automated CPI package sync (dynamic list via API)" || echo "No changes"
+          git push || true
