@@ -1,61 +1,73 @@
-name: Sync Multiple CPI Packages
-
+name: Deploy CPI Package (Manual ID Input)
+ 
 on:
+  # Line 5: Start of event trigger
   workflow_dispatch:
     inputs:
-      packages:
-        description: "Enter package names (comma or space separated)"
+      package:
+        # Allows entering any package ID at runtime
+        description: "Enter the CPI Package ID to deploy (e.g., logan)"
         required: true
-
+        type: string
+ 
 jobs:
-  sync:
+  deploy:
     runs-on: ubuntu-latest
-
+    # Container is run for the entire job
+    container:
+      image: engswee/flashpipe:latest
+ 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Normalize package list
-        id: normalize
+ 
+      - name: Set up Environment Variables
+        id: env_setup
         run: |
-          RAW="${{ github.event.inputs.packages }}"
-          CLEANED=$(echo "$RAW" | tr ',' ' ')
-          echo "packages=$CLEANED" >> $GITHUB_OUTPUT
-
-      - name: Run FlashPipe inside Docker (with correct permissions!)
+          # Set variables for the deployment step
+          echo "PKG=${{ github.event.inputs.package }}" >> $GITHUB_ENV
+          echo "PACKAGE_DIR=cpi-artifacts/${{ github.event.inputs.package }}" >> $GITHUB_ENV
+ 
+      # This step should be approximately where Line 71 might fall in a large file.
+      - name: Deploy Package & Artifacts (Compatible Version)
+        # Indent 'env' by two spaces under 'name'
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        # Indent 'run' by two spaces under 'name'
         run: |
-          docker run --rm \
-            --user $(id -u):$(id -g) \
-            -v "${GITHUB_WORKSPACE}:/workspace" \
-            -w /workspace \
-            -e TMN_HOST="$TMN_HOST" \
-            -e OAUTH_HOST="$OAUTH_HOST" \
-            -e CLIENT_ID="$CLIENT_ID" \
-            -e CLIENT_SECRET="$CLIENT_SECRET" \
-            engswee/flashpipe:latest \
-            sh -c '
-              for PKG in ${{ steps.normalize.outputs.packages }}; do
-                echo "➡ Syncing $PKG..."
-                flashpipe sync \
-                  --tmn-host "$TMN_HOST" \
-                  --oauth-host "$OAUTH_HOST" \
-                  --oauth-clientid "$CLIENT_ID" \
-                  --oauth-clientsecret "$CLIENT_SECRET" \
-                  --package-id "$PKG" \
-                  --dir-artifacts "cpi-artifacts/$PKG" \
-                  --sync-package-details
-              done
-            '
-
-      - name: Commit & push
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add .
-          git commit -m "Synced packages: ${{ github.event.inputs.packages }}" || echo "No changes"
-          git push || true
+          echo "Starting deployment for package: $PKG"
+         
+          # 1. Validation & Artifact ID finding
+          if [ ! -d "$PACKAGE_DIR" ]; then
+            echo "::error::Package directory $PACKAGE_DIR not found in the repository."
+            exit 1
+          fi
+         
+          ARTIFACT_IDS=$(find "$PACKAGE_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f,")
+          ARTIFACT_IDS=${ARTIFACT_IDS%,}
+         
+          if [ -z "$ARTIFACT_IDS" ]; then
+            echo "::warning::No artifacts found in $PACKAGE_DIR. Nothing to deploy."
+            exit 0
+          fi
+         
+          echo "Found Artifact IDs to deploy: $ARTIFACT_IDS"
+         
+          # 2. Execute the FlashPipe sync command for Deployment
+          echo "➡ Deploying package $PKG and artifacts ($ARTIFACT_IDS) to tenant..."
+          echo "WARNING: The artifact will be deployed but remain STOPPED. Please start it manually."
+         
+          flashpipe sync \
+            --tmn-host "$TMN_HOST" \
+            --oauth-host "$OAUTH_HOST" \
+            --oauth-clientid "$CLIENT_ID" \
+            --oauth-clientsecret "$CLIENT_SECRET" \
+            --package-id "$PKG" \
+            --dir-artifacts "$PACKAGE_DIR" \
+            --sync-package-details \
+            --target "tenant"
+         
+          echo "Deployment command successfully executed."
