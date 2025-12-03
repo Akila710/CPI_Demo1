@@ -1,4 +1,4 @@
-ame: Sync All CPI Packages (Dynamic - FINAL ATTEMPT)
+name: Sync All CPI Packages (Dynamic - FINAL ATTEMPT)
 on:
   workflow_dispatch:
 jobs:
