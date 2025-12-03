@@ -1,4 +1,4 @@
-name: Sync All CPI Package Versions
+name: Fetch All Versioned iFlows From CPI
 
 on:
   workflow_dispatch:
@@ -8,125 +8,148 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------
-      # 1. Checkout Repository
-      # ---------------------------------------------
+      # -----------------------------------------------------
+      # CHECKOUT REPOSITORY
+      # -----------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------
-      # 2. Install tools (jq, curl, unzip)
-      # ---------------------------------------------
-      - name: Install Dependencies
+      # -----------------------------------------------------
+      # INSTALL DEPENDENCIES
+      # -----------------------------------------------------
+      - name: Install API tools (curl, jq, unzip)
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl unzip
 
-      # ---------------------------------------------
-      # 3. Generate OAuth Token
-      # ---------------------------------------------
-      - name: Generate OAuth Token
+      # -----------------------------------------------------
+      # GET OAUTH TOKEN
+      # -----------------------------------------------------
+      - name: Fetch OAuth Token
         id: token
         env:
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
         run: |
-          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
+          echo "🔑 Requesting OAuth token..."
+          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
 
-          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
 
-          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
+          TOKEN=$(echo "$RESPONSE" | jq -r ".access_token")
 
-          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
-            echo "::error:: FAILED to get OAuth token"
-            echo "$AUTH_RESPONSE"
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Failed to get OAuth token"
+            echo "$RESPONSE"
             exit 1
           fi
 
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
+          echo "✔ Token generated"
 
-      # ---------------------------------------------
-      # 4. Fetch all packages
-      # ---------------------------------------------
+      # -----------------------------------------------------
+      # FETCH ALL PACKAGES
+      # -----------------------------------------------------
       - name: Fetch Package List
         id: packages
         env:
+          TOKEN: ${{ env.TOKEN }}
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          API_URL="https://${TMN_HOST}/api/v1/IntegrationPackages?\$format=json"
+          echo "📦 Fetching all CPI packages..."
 
-          PACKAGE_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL")
+          API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
+          RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL")
 
-          PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" \
-            | jq -r ".d.results[].Id" | tr '\n' ' ')
+          PACKAGE_IDS=$(echo "$RESPONSE" | jq -r ".d.results[].Id")
 
           if [ -z "$PACKAGE_IDS" ]; then
-            echo "::error:: No packages found!"
+            echo "::error::No packages found"
             exit 1
           fi
 
-          echo "Found packages: $PACKAGE_IDS"
-          echo "pkgs=$PACKAGE_IDS" >> $GITHUB_OUTPUT
+          echo "✔ Found packages:"
+          echo "$PACKAGE_IDS"
 
-      # ---------------------------------------------
-      # 5. Download ALL iFlows (Snapshot Versioning)
-      # ---------------------------------------------
-      - name: Download all iFlow versions
+          echo "PACKAGES=$PACKAGE_IDS" >> $GITHUB_ENV
+
+      # -----------------------------------------------------
+      # FETCH ALL IFLOW VERSIONS FOR EACH PACKAGE
+      # -----------------------------------------------------
+      - name: Fetch All Versions of All iFlows
         env:
+          TOKEN: ${{ env.TOKEN }}
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          TOKEN: ${{ steps.token.outputs.token }}
+          PACKAGES: ${{ env.PACKAGES }}
         run: |
-          TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-          echo "Snapshot version timestamp = $TIMESTAMP"
+          echo "🚀 Starting full multi-version backup..."
 
-          for PKG in ${{ steps.packages.outputs.pkgs }}; do
-            echo "📦 Processing package: $PKG"
+          for PKG in $PACKAGES; do
+            echo "==================================================="
+            echo "📦 Processing Package: $PKG"
 
-            # Fetch iFlows inside package
-            ART_URL="https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
+            ART_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
 
-            ARTIFACTS=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
+            ART_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
+            FLOW_IDS=$(echo "$ART_RESPONSE" | jq -r ".d.results[].Id")
 
-            for FLOW in $(echo "$ARTIFACTS" | jq -r ".d.results[].Id"); do
-              echo "➡ Downloading iFlow: $FLOW"
+            if [ -z "$FLOW_IDS" ]; then
+              echo "⚠ No iFlows inside $PKG"
+              continue
+            fi
 
-              ZIPFILE="$FLOW-$TIMESTAMP.zip"
+            for FLOW in $FLOW_IDS; do
+              echo "➡ Fetching versions for iFlow: $FLOW"
 
-              # Download latest version
-              curl -s \
-                -H "Authorization: Bearer $TOKEN" \
-                "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
-                -o "$ZIPFILE"
+              VERS_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW')/ArtifactVersions?\$format=json"
 
-              if [ ! -f "$ZIPFILE" ]; then
-                echo "::warning:: Failed to download $FLOW"
+              VERS_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$VERS_URL")
+              VERSION_LIST=$(echo "$VERS_RESPONSE" | jq -r ".d.results[].Version")
+
+              if [ -z "$VERSION_LIST" ]; then
+                echo "⚠ No versions found for $FLOW"
                 continue
               fi
 
-              # Create version folder
-              TARGET_DIR="cpi-artifacts/$PKG/$FLOW/versions/$TIMESTAMP"
-              mkdir -p "$TARGET_DIR"
+              echo "✔ Versions: $VERSION_LIST"
 
-              # Extract
-              unzip -o "$ZIPFILE" -d "$TARGET_DIR" > /dev/null
+              for VER in $VERSION_LIST; do
+                echo "⬇ Downloading Version $VER of $FLOW..."
 
-              rm "$ZIPFILE"
-              echo "✔ Saved snapshot: $TARGET_DIR"
+                ZIP_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW',Version='$VER')/Content"
+                ZIPFILE="${FLOW}-${VER}.zip"
+
+                curl -s -H "Authorization: Bearer $TOKEN" "$ZIP_URL" -o "$ZIPFILE"
+
+                if [ ! -f "$ZIPFILE" ]; then
+                  echo "❌ Failed to download $FLOW version $VER"
+                  continue
+                fi
+
+                TARGET_DIR="cpi-artifacts/$PKG/$FLOW/versions/$VER"
+                mkdir -p "$TARGET_DIR"
+
+                unzip -o "$ZIPFILE" -d "$TARGET_DIR" >/dev/null
+                rm "$ZIPFILE"
+
+                echo "✔ Saved: $TARGET_DIR"
+              done
+
             done
           done
 
-      # ---------------------------------------------
-      # 6. Commit changes to GitHub
-      # ---------------------------------------------
-      - name: Commit & Push
+          echo "🎉 Backup complete — all versions downloaded!"
+
+      # -----------------------------------------------------
+      # COMMIT TO GITHUB
+      # -----------------------------------------------------
+      - name: Commit & Push changes
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
           git add .
-          git commit -m "Snapshot version sync at $(date)" || echo "No changes"
+          git commit -m "Fetched all versioned CPI iFlows" || echo "No changes"
           git push || true
