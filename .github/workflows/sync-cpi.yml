@@ -1,112 +1,84 @@
-name: Sync All CPI Packages (Save All Versions)
+name: Sync All CPI Versions to GitHub
+
 on:
   workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
-      - name: Install Dependencies for CPI API Calls
+      - uses: actions/checkout@v4
+
+      - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y jq curl unzip
 
-      # -----------------------------------------------------------
-      # STEP 1 — DYNAMIC FETCH OF ALL PACKAGE IDs FROM CPI
-      # -----------------------------------------------------------
-      - name: Dynamic Fetch and Normalize Package List
-        id: normalize
+      - name: Get OAuth Token
+        id: token
         env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
         run: |
-          echo "🔑 Generating OAuth Token..."
-          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
-
-          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
+          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
+          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
             -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
+          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
-          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
-
-          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "::error::Could not generate OAuth token"
-            exit 1
-          fi
-
-          echo "🔍 Fetching package list..."
-
-          PACKAGE_LIST=$(curl -s -X GET "https://${TMN_HOST}/api/v1/IntegrationPackages?\$format=json" \
-            -H "Authorization: Bearer $TOKEN")
-
-          PACKAGE_IDS=$(echo "$PACKAGE_LIST" | jq -r ".d.results[].Id" | tr '\n' ' ')
-          echo "packages=$PACKAGE_IDS" >> $GITHUB_OUTPUT
-
-      # -----------------------------------------------------------
-      # STEP 2 — RUN FLASHPIPE TO PULL NEWEST VERSION
-      # -----------------------------------------------------------
-      - name: Sync Packages Using FlashPipe
+      - name: Fetch all packages
+        id: packages
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+          TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          docker run --rm \
-            --user $(id -u):$(id -g) \
-            -v "${GITHUB_WORKSPACE}:/workspace" \
-            -w /workspace \
-            -e TMN_HOST="$TMN_HOST" \
-            -e OAUTH_HOST="$OAUTH_HOST" \
-            -e CLIENT_ID="$CLIENT_ID" \
-            -e CLIENT_SECRET="$CLIENT_SECRET" \
-            engswee/flashpipe:latest \
-            sh -c '
-              for PKG in ${{ steps.normalize.outputs.packages }}; do
-                echo "➡ Pulling latest version of $PKG..."
-                flashpipe sync \
-                  --tmn-host "$TMN_HOST" \
-                  --oauth-host "$OAUTH_HOST" \
-                  --oauth-clientid "$CLIENT_ID" \
-                  --oauth-clientsecret "$CLIENT_SECRET" \
-                  --package-id "$PKG" \
-                  --dir-artifacts "tmp-latest/$PKG" \
-                  --sync-package-details
-              done
-            '
+          RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json")
+          PKGS=$(echo "$RESPONSE" | jq -r ".d.results[].Id")
+          echo "$PKGS" > packages.txt
+          echo "packages=$(echo $PKGS | tr '\n' ' ')" >> $GITHUB_OUTPUT
 
-      # -----------------------------------------------------------
-      # STEP 3 — VERSIONING: MOVE NEW CONTENT INTO VERSION FOLDERS
-      # -----------------------------------------------------------
-      - name: Save Versioned Copies in Git
+      - name: Fetch all iFlows + ALL versions
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-          echo "📦 Saving new version under: $TIMESTAMP"
+          while read PKG; do
+            echo "📦 Processing Package: $PKG"
 
-          for PKG in ${{ steps.normalize.outputs.packages }}; do
-            echo "Processing $PKG ..."
+            ARTIFACTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+              "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json")
 
-            mkdir -p "cpi-artifacts/$PKG/versions/$TIMESTAMP"
+            for FLOW in $(echo "$ARTIFACTS" | jq -r ".d.results[].Id"); do
+              echo "➡ iFlow: $FLOW"
 
-            cp -r "tmp-latest/$PKG/." "cpi-artifacts/$PKG/versions/$TIMESTAMP/"
-          done
+              # Fetch all versions
+              VERSIONS=$(curL -s -H "Authorization: Bearer $TOKEN" \
+                "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/ArtifactVersions?\$format=json")
 
-          rm -rf tmp-latest
+              echo "$VERSIONS" | jq -r ".d.results[].Version" > tmpversions.txt
 
-      # -----------------------------------------------------------
-      # STEP 4 — COMMIT & PUSH VERSIONED BACKUP
-      # -----------------------------------------------------------
-      - name: Commit & push versioned backup
+              while read VER; do
+                echo "⬇ Downloading Version $VER of $FLOW"
+
+                curl -s \
+                  -H "Authorization: Bearer $TOKEN" \
+                  "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW',Version='$VER')/Content" \
+                  -o "$FLOW-$VER.zip"
+
+                mkdir -p "cpi-artifacts/$PKG/$FLOW/versions/$VER"
+                unzip -o "$FLOW-$VER.zip" -d "cpi-artifacts/$PKG/$FLOW/versions/$VER"
+                rm "$FLOW-$VER.zip"
+              done < tmpversions.txt
+            done
+          done < packages.txt
+
+      - name: Commit & Push
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          git add .
-          git commit -m "Full CPI Sync - Version folder created" || echo "No new changes"
-          git push || true
+          git add cpi-artifacts
+          git commit -m "Fetched all CPI versions" || true
+          git push
