@@ -1,113 +1,117 @@
-name: Restore Full Version History of a CPI Package
+name: Single-Click Restore ALL Package Histories
 
 on:
   workflow_dispatch:
-    inputs:
-      package_id:
-        description: "Enter CPI Package ID (Example: DEMO)"
-        required: true
-        type: string
 
 jobs:
-  restore:
+  mass_restore:
     runs-on: ubuntu-latest
 
     container:
       image: engswee/flashpipe:latest
 
     steps:
-
-      # -----------------------------------------------------
+      # --------------------------------------------------------
       # CHECKOUT FULL GIT HISTORY
-      # -----------------------------------------------------
-      - name: Checkout full git history
+      # --------------------------------------------------------
+      - name: Checkout repository (Full History)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # important: fetch full commit history
+          fetch-depth: 0
+          persist-credentials: true
 
-      # -----------------------------------------------------
+      # --------------------------------------------------------
       # FIX SAFE DIRECTORY ISSUE
-      # -----------------------------------------------------
-      - name: Configure git safe directory
+      # --------------------------------------------------------
+      - name: Configure Git Safe Directory
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      # -----------------------------------------------------
-      # FIND ALL COMMITS FOR THE PACKAGE
-      # -----------------------------------------------------
-      - name: Find historical commits
-        id: commits
-        env:
-          PKG_ID: ${{ github.event.inputs.package_id }}
+      # --------------------------------------------------------
+      # DISCOVER ALL PACKAGE FOLDERS IN GIT
+      # --------------------------------------------------------
+      - name: Discover all package folders
+        id: discovery
         run: |
-          echo "🔍 Searching commits for package: $PKG_ID"
+          PKGS_TO_RESTORE=$(find cpi-artifacts -maxdepth 1 -mindepth 1 -type d -printf "%f " | tr '\n' ' ')
 
-          PACKAGE_DIR="cpi-artifacts/$PKG_ID"
-
-          COMMITS=$(git log --pretty=format:'%H' --reverse -- "$PACKAGE_DIR")
-
-          if [ -z "$COMMITS" ]; then
-            echo "::error::No history found for $PKG_ID"
-            exit 1
+          if [ -z "$PKGS_TO_RESTORE" ]; then
+            echo "::warning::No package directories found in cpi-artifacts. Nothing to restore."
+            exit 0
           fi
 
-          echo "Found commits:"
-          echo "$COMMITS"
+          echo "✅ Packages detected: $PKGS_TO_RESTORE"
+          echo "packages=$PKGS_TO_RESTORE" >> $GITHUB_OUTPUT
 
-          # Convert newline → space-separated
-          CLEAN=$(echo "$COMMITS" | tr '\n' ' ')
-          echo "commit_list=$CLEAN" >> $GITHUB_OUTPUT
-
-      # -----------------------------------------------------
-      # RESTORE EACH VERSION IN ORDER
-      # -----------------------------------------------------
-      - name: Deploy each version sequentially
+      # --------------------------------------------------------
+      # RESTORE FULL HISTORY OF ALL PACKAGES
+      # --------------------------------------------------------
+      - name: Deploy ALL versions sequentially to CPI
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-
-          PKG_ID: ${{ github.event.inputs.package_id }}
-          COMMITS_LIST: ${{ steps.commits.outputs.commit_list }}
+          ALL_PKGS: ${{ steps.discovery.outputs.packages }}
+          COMMIT_MESSAGE: "Sync repo from tenant"
         run: |
-          PACKAGE_DIR="cpi-artifacts/$PKG_ID"
           EXIT_CODE=0
 
-          for HASH in $COMMITS_LIST; do
-            echo "========================================================"
-            echo "⏪ Restoring version from commit: $HASH"
+          for PKG_ID in $ALL_PKGS; do
+            echo "=========================================================="
+            echo "📦 Restoring history for package: $PKG_ID"
+            echo "=========================================================="
 
-            # Restore historical files for this version
-            git checkout $HASH -- "$PACKAGE_DIR"
+            PACKAGE_DIR="cpi-artifacts/$PKG_ID"
 
-            if [ ! -d "$PACKAGE_DIR" ]; then
-              echo "::error::Missing package in commit $HASH"
+            # 1. Get all commits referencing this package
+            COMMITS_LIST=$(git log --pretty=format:'%H' --reverse --grep "$COMMIT_MESSAGE" -- "$PACKAGE_DIR" | tr '\n' ' ')
+
+            if [ -z "$COMMITS_LIST" ]; then
+              echo "::warning::No commit history found for $PKG_ID — skipping."
               continue
             fi
 
-            echo "🚀 Deploying to CPI Tenant..."
+            echo "📝 Commits detected for $PKG_ID:"
+            echo "$COMMITS_LIST"
 
-            flashpipe sync \
-              --tmn-host "$TMN_HOST" \
-              --oauth-host "$OAUTH_HOST" \
-              --oauth-clientid "$CLIENT_ID" \
-              --oauth-clientsecret "$CLIENT_SECRET" \
-              --package-id "$PKG_ID" \
-              --dir-artifacts "$PACKAGE_DIR" \
-              --sync-package-details \
-              --target tenant
+            # 2. Sequentially deploy each commit to CPI
+            for COMMIT_HASH in $COMMITS_LIST; do
+              echo "----------------------------------------------------------"
+              echo "➡ Deploying package '$PKG_ID' at commit: $COMMIT_HASH"
 
-            if [ $? -ne 0 ]; then
-              echo "::error::Deployment failed at commit $HASH"
-              EXIT_CODE=1
-              break
-            fi
+              # Restore the version of this commit
+              git checkout $COMMIT_HASH -- "$PACKAGE_DIR"
 
-            echo "✔ Successfully deployed version from commit $HASH"
+              if [ ! -d "$PACKAGE_DIR" ]; then
+                echo "::error::Directory missing in commit $COMMIT_HASH. Skipping."
+                continue
+              fi
 
-            # Cleanup restore to avoid mixing versions
-            git checkout HEAD -- "$PACKAGE_DIR"
+              # Execute FlashPipe deployment
+              flashpipe sync \
+                --tmn-host "$TMN_HOST" \
+                --oauth-host "$OAUTH_HOST" \
+                --oauth-clientid "$CLIENT_ID" \
+                --oauth-clientsecret "$CLIENT_SECRET" \
+                --package-id "$PKG_ID" \
+                --dir-artifacts "$PACKAGE_DIR" \
+                --sync-package-details \
+                --target "tenant"
+
+              if [ $? -ne 0 ]; then
+                echo "::error::Deployment FAILED at commit $COMMIT_HASH for $PKG_ID"
+                EXIT_CODE=1
+                break
+              fi
+
+              echo "✅ Version deployed for commit: $COMMIT_HASH"
+
+              # Restore working directory
+              git checkout HEAD -- "$PACKAGE_DIR"
+            done
+
+            echo "🎉 Completed restore of package: $PKG_ID"
           done
 
           exit $EXIT_CODE
