@@ -1,0 +1,10 @@
+{
+  "d": {
+    "Id": "Demo",
+    "Name": "Demo",
+    "Description": "\u003cp\u003e\u003c/p\u003e",
+    "ShortText": "for practice",
+    "Version": "",
+    "Mode": "EDIT_ALLOWED"
+  }
+}
