@@ -1,155 +1,91 @@
-name: Fetch All Versioned iFlows From CPI
+name: Restore Full Version History of a CPI Package
 
 on:
   workflow_dispatch:
+    inputs:
+      package_id:
+        description: "Enter CPI Package ID (Example: DEMO)"
+        required: true
+        type: string
 
 jobs:
-  sync:
+  restore:
     runs-on: ubuntu-latest
+
+    container:
+      image: engswee/flashpipe:latest
 
     steps:
       # -----------------------------------------------------
-      # CHECKOUT REPOSITORY
+      # CHECKOUT FULL GIT HISTORY
       # -----------------------------------------------------
-      - name: Checkout repository
+      - name: Checkout repository (full history)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # -----------------------------------------------------
-      # INSTALL DEPENDENCIES
+      # FIX SAFE DIRECTORY ISSUES
       # -----------------------------------------------------
-      - name: Install API tools (curl, jq, unzip)
+      - name: Configure git safe directory
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl unzip
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       # -----------------------------------------------------
-      # GET OAUTH TOKEN
+      # FIND HISTORICAL COMMITS
       # -----------------------------------------------------
-      - name: Fetch OAuth Token
-        id: token
+      - name: Find all version commits for package
+        id: commits
         env:
+          PKG_ID: ${{ github.event.inputs.package_id }}
+        run: |
+          echo "🔍 Searching for all version commits for package: $PKG_ID"
+
+          PACKAGE_PATH="cpi-artifacts/$PKG_ID"
+
+          # Find all commits that touched the package folder
+          RAW_COMMITS=$(git log --pretty=format:'%H' --reverse -- "$PACKAGE_PATH")
+
+          if [ -z "$RAW_COMMITS" ]; then
+            echo "::error::No commits found for $PKG_ID"
+            exit 1
+          fi
+
+          echo "Found commits:"
+          echo "$RAW_COMMITS"
+
+          # Convert newlines → space-separated list
+          COMMITS_LIST=$(echo "$RAW_COMMITS" | tr '\n' ' ')
+          echo "commit_list=$COMMITS_LIST" >> $GITHUB_OUTPUT
+
+      # -----------------------------------------------------
+      # RESTORE & DEPLOY EACH VERSION
+      # -----------------------------------------------------
+      - name: Deploy each historical version sequentially
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          PKG_ID: ${{ github.event.inputs.package_id }}
+          COMMITS: ${{ steps.commits.outputs.commit_list }}
         run: |
-          echo "🔑 Requesting OAuth token..."
-          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
+          PACKAGE_DIR="cpi-artifacts/$PKG_ID"
+          EXIT_CODE=0
 
-          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
+          for HASH in $COMMITS; do
+            echo "=========================================================="
+            echo "⏪ Restoring commit: $HASH"
+            
+            # Extract only this version
+            git checkout $HASH -- "$PACKAGE_DIR"
 
-          TOKEN=$(echo "$RESPONSE" | jq -r ".access_token")
-
-          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
-            echo "::error::Failed to get OAuth token"
-            echo "$RESPONSE"
-            exit 1
-          fi
-
-          echo "TOKEN=$TOKEN" >> $GITHUB_ENV
-          echo "✔ Token generated"
-
-      # -----------------------------------------------------
-      # FETCH ALL PACKAGES
-      # -----------------------------------------------------
-      - name: Fetch Package List
-        id: packages
-        env:
-          TOKEN: ${{ env.TOKEN }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          echo "📦 Fetching all CPI packages..."
-
-          API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
-          RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL")
-
-          PACKAGE_IDS=$(echo "$RESPONSE" | jq -r ".d.results[].Id")
-
-          if [ -z "$PACKAGE_IDS" ]; then
-            echo "::error::No packages found"
-            exit 1
-          fi
-
-          echo "✔ Found packages:"
-          echo "$PACKAGE_IDS"
-
-          echo "PACKAGES=$PACKAGE_IDS" >> $GITHUB_ENV
-
-      # -----------------------------------------------------
-      # FETCH ALL IFLOW VERSIONS FOR EACH PACKAGE
-      # -----------------------------------------------------
-      - name: Fetch All Versions of All iFlows
-        env:
-          TOKEN: ${{ env.TOKEN }}
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          PACKAGES: ${{ env.PACKAGES }}
-        run: |
-          echo "🚀 Starting full multi-version backup..."
-
-          for PKG in $PACKAGES; do
-            echo "==================================================="
-            echo "📦 Processing Package: $PKG"
-
-            ART_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
-
-            ART_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
-            FLOW_IDS=$(echo "$ART_RESPONSE" | jq -r ".d.results[].Id")
-
-            if [ -z "$FLOW_IDS" ]; then
-              echo "⚠ No iFlows inside $PKG"
+            if [ ! -d "$PACKAGE_DIR" ]; then
+              echo "::error::Package folder missing in commit $HASH. Skipping."
               continue
             fi
 
-            for FLOW in $FLOW_IDS; do
-              echo "➡ Fetching versions for iFlow: $FLOW"
+            echo "🚀 Deploying version from commit $HASH..."
 
-              VERS_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW')/ArtifactVersions?\$format=json"
-
-              VERS_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$VERS_URL")
-              VERSION_LIST=$(echo "$VERS_RESPONSE" | jq -r ".d.results[].Version")
-
-              if [ -z "$VERSION_LIST" ]; then
-                echo "⚠ No versions found for $FLOW"
-                continue
-              fi
-
-              echo "✔ Versions: $VERSION_LIST"
-
-              for VER in $VERSION_LIST; do
-                echo "⬇ Downloading Version $VER of $FLOW..."
-
-                ZIP_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW',Version='$VER')/Content"
-                ZIPFILE="${FLOW}-${VER}.zip"
-
-                curl -s -H "Authorization: Bearer $TOKEN" "$ZIP_URL" -o "$ZIPFILE"
-
-                if [ ! -f "$ZIPFILE" ]; then
-                  echo "❌ Failed to download $FLOW version $VER"
-                  continue
-                fi
-
-                TARGET_DIR="cpi-artifacts/$PKG/$FLOW/versions/$VER"
-                mkdir -p "$TARGET_DIR"
-
-                unzip -o "$ZIPFILE" -d "$TARGET_DIR" >/dev/null
-                rm "$ZIPFILE"
-
-                echo "✔ Saved: $TARGET_DIR"
-              done
-
-            done
-          done
-
-          echo "🎉 Backup complete — all versions downloaded!"
-
-      # -----------------------------------------------------
-      # COMMIT TO GITHUB
-      # -----------------------------------------------------
-      - name: Commit & Push changes
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add .
-          git commit -m "Fetched all versioned CPI iFlows" || echo "No changes"
-          git push || true
+            flashpipe sync \
+              --tmn-host "$TMN_HOST" \
