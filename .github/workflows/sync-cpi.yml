@@ -1,4 +1,4 @@
-name: Sync All CPI Versions to GitHub
+name: Sync All CPI Package Versions
 
 on:
   workflow_dispatch:
@@ -6,79 +6,127 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+
     steps:
+      # ---------------------------------------------
+      # 1. Checkout Repository
+      # ---------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-
-      - name: Install tools
+      # ---------------------------------------------
+      # 2. Install tools (jq, curl, unzip)
+      # ---------------------------------------------
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl unzip
 
-      - name: Get OAuth Token
+      # ---------------------------------------------
+      # 3. Generate OAuth Token
+      # ---------------------------------------------
+      - name: Generate OAuth Token
         id: token
         env:
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
         run: |
-          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
-          RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+          TOKEN_URL="https://${OAUTH_HOST}/oauth/token"
+
+          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
             -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
-          TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
+
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error:: FAILED to get OAuth token"
+            echo "$AUTH_RESPONSE"
+            exit 1
+          fi
+
           echo "token=$TOKEN" >> $GITHUB_OUTPUT
 
-      - name: Fetch all packages
+      # ---------------------------------------------
+      # 4. Fetch all packages
+      # ---------------------------------------------
+      - name: Fetch Package List
         id: packages
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            "https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json")
-          PKGS=$(echo "$RESPONSE" | jq -r ".d.results[].Id")
-          echo "$PKGS" > packages.txt
-          echo "packages=$(echo $PKGS | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          API_URL="https://${TMN_HOST}/api/v1/IntegrationPackages?\$format=json"
 
-      - name: Fetch all iFlows + ALL versions
+          PACKAGE_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API_URL")
+
+          PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" \
+            | jq -r ".d.results[].Id" | tr '\n' ' ')
+
+          if [ -z "$PACKAGE_IDS" ]; then
+            echo "::error:: No packages found!"
+            exit 1
+          fi
+
+          echo "Found packages: $PACKAGE_IDS"
+          echo "pkgs=$PACKAGE_IDS" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------
+      # 5. Download ALL iFlows (Snapshot Versioning)
+      # ---------------------------------------------
+      - name: Download all iFlow versions
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           TOKEN: ${{ steps.token.outputs.token }}
         run: |
-          while read PKG; do
-            echo "📦 Processing Package: $PKG"
+          TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+          echo "Snapshot version timestamp = $TIMESTAMP"
 
-            ARTIFACTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
-              "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json")
+          for PKG in ${{ steps.packages.outputs.pkgs }}; do
+            echo "📦 Processing package: $PKG"
+
+            # Fetch iFlows inside package
+            ART_URL="https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
+
+            ARTIFACTS=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
 
             for FLOW in $(echo "$ARTIFACTS" | jq -r ".d.results[].Id"); do
-              echo "➡ iFlow: $FLOW"
+              echo "➡ Downloading iFlow: $FLOW"
 
-              # Fetch all versions
-              VERSIONS=$(curL -s -H "Authorization: Bearer $TOKEN" \
-                "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/ArtifactVersions?\$format=json")
+              ZIPFILE="$FLOW-$TIMESTAMP.zip"
 
-              echo "$VERSIONS" | jq -r ".d.results[].Version" > tmpversions.txt
+              # Download latest version
+              curl -s \
+                -H "Authorization: Bearer $TOKEN" \
+                "https://${TMN_HOST}/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
+                -o "$ZIPFILE"
 
-              while read VER; do
-                echo "⬇ Downloading Version $VER of $FLOW"
+              if [ ! -f "$ZIPFILE" ]; then
+                echo "::warning:: Failed to download $FLOW"
+                continue
+              fi
 
-                curl -s \
-                  -H "Authorization: Bearer $TOKEN" \
-                  "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW',Version='$VER')/Content" \
-                  -o "$FLOW-$VER.zip"
+              # Create version folder
+              TARGET_DIR="cpi-artifacts/$PKG/$FLOW/versions/$TIMESTAMP"
+              mkdir -p "$TARGET_DIR"
 
-                mkdir -p "cpi-artifacts/$PKG/$FLOW/versions/$VER"
-                unzip -o "$FLOW-$VER.zip" -d "cpi-artifacts/$PKG/$FLOW/versions/$VER"
-                rm "$FLOW-$VER.zip"
-              done < tmpversions.txt
+              # Extract
+              unzip -o "$ZIPFILE" -d "$TARGET_DIR" > /dev/null
+
+              rm "$ZIPFILE"
+              echo "✔ Saved snapshot: $TARGET_DIR"
             done
-          done < packages.txt
+          done
 
+      # ---------------------------------------------
+      # 6. Commit changes to GitHub
+      # ---------------------------------------------
       - name: Commit & Push
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add cpi-artifacts
-          git commit -m "Fetched all CPI versions" || true
-          git push
+
+          git add .
+          git commit -m "Snapshot version sync at $(date)" || echo "No changes"
+          git push || true
