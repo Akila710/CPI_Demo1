@@ -1,4 +1,4 @@
-name: 🤖 Generate iFlow Documentation (Groq)
+name: 🤖 Generate iFlow Documentation (Groq API)
 
 on:
   workflow_dispatch:
@@ -40,26 +40,25 @@ jobs:
 
           echo "📦 Processing package: $PACKAGE_ID"
 
-          # Create SYSTEM_PROMPT safely
-          SYSTEM_PROMPT=$(cat << 'EOF'
-You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
+          # SAFE SYSTEM PROMPT (no heredoc)
+          SYSTEM_PROMPT="$(printf "%s" \
+"You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
 
 Use EXACTLY this 10-section structure:
 
-1. High-level architecture  
-2. Purpose of the iFlow  
-3. Sender/Receiver systems  
-4. Adapter types used  
-5. Step-by-step flow logic  
-6. Mapping logic  
-7. Groovy scripts explanation  
-8. Error handling  
-9. Security/authentication  
-10. Deployment notes  
-EOF
-)
+1. High-level architecture
+2. Purpose of the iFlow
+3. Sender/Receiver systems
+4. Adapter types used
+5. Step-by-step flow logic
+6. Mapping logic
+7. Groovy scripts explanation
+8. Error handling
+9. Security/authentication
+10. Deployment notes
+")"
 
-          # Loop through iFlows inside package
+          # Loop through iFlows
           find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
           while IFS= read -r -d '' IFLOW_PATH; do
             IFLOW_NAME=$(basename "$IFLOW_PATH")
@@ -67,7 +66,6 @@ EOF
 
             OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
 
-            # Collect artifacts
             CONTENT=""
             FILES=$(find "$IFLOW_PATH" -type f \( -name "iFlowContent.xml" -o -name "*.groovy" -o -name "*.xslt" \))
 
@@ -82,17 +80,14 @@ EOF
               CONTENT+="\n--- END ARTIFACT: $FILE ---\n"
             done
 
-            # Build user message
-            USER_MESSAGE=$(cat << EOF
-Analyze all artifacts from iFlow "$IFLOW_NAME" and generate full documentation.
+            USER_MESSAGE="Analyze all artifacts from iFlow '$IFLOW_NAME' and generate full documentation.
 
 \`\`\`text
 $CONTENT
 \`\`\`
-EOF
-)
+"
 
-            # Build payload
+            # Create JSON payload
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -106,36 +101,5 @@ EOF
                 temperature: 0.1
               }')
 
-            # API Call
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Content-Type: application/json" \
-              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
-              -d "$PAYLOAD")
-
-            DOC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-            if [ -z "$DOC" ] || [ "$DOC" == "null" ]; then
-              echo "❌ Groq API failed for: $IFLOW_NAME"
-              echo "Response: $RESPONSE"
-              continue
-            fi
-
-            echo "$DOC" > "$OUTPUT_FILE"
-            echo "  ✅ Saved documentation → $OUTPUT_FILE"
-
-          done
-
-      - name: Commit Changes
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          git add cpi-artifacts/**/iFlow_Documentation.md
-
-          if git diff --cached --quiet; then
-            echo "ℹ No changes to commit."
-          else
-            git commit -m "🤖 Auto-generated iFlow documentation via Groq"
-            git push
-            echo "✅ Documentation committed."
-          fi
