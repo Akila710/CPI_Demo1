@@ -34,7 +34,6 @@ jobs:
 
           PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          # Validate package directory
           if [ ! -d "$PKG_DIR" ]; then
             echo "::error:: Package folder not found: $PKG_ID"
             exit 1
@@ -43,22 +42,21 @@ jobs:
           echo "📦 Processing package: $PKG_ID"
 
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
-          Create documentation ONLY for the CPI iFlow based on its artifacts.
-          Follow this structure:
-          1. High-level architecture
-          2. Purpose
-          3. Sender/Receiver systems
-          4. Adapter types used
-          5. End-to-end processing steps
-          6. Mapping logic (XML/XSLT/json)
-          7. Groovy script logic
-          8. Error handling
-          9. Security/authentication
-          10. Deployment notes"
+Create documentation ONLY for the CPI iFlow based on its artifacts.
+Follow this structure:
+1. High-level architecture
+2. Purpose
+3. Sender/Receiver systems
+4. Adapter types used
+5. End-to-end processing steps
+6. Mapping logic (XML/XSLT/json)
+7. Groovy script logic
+8. Error handling
+9. Security/authentication
+10. Deployment notes"
 
           # Loop through each iFlow folder
           for FLOW_DIR in "$PKG_DIR"/*; do
-
             [[ -d "$FLOW_DIR" ]] || continue
 
             FLOW_NAME=$(basename "$FLOW_DIR")
@@ -67,17 +65,16 @@ jobs:
             echo "📝 Generating documentation for iFlow: $FLOW_NAME"
             echo "📂 Scanning folder: $FLOW_DIR"
 
-            # Collect ALL files inside the iFlow folder
+            # Collect all files inside the folder
             FILES=$(find "$FLOW_DIR" -type f)
 
             if [ -z "$FILES" ]; then
-              echo "⚠ No files found in iFlow: $FLOW_NAME — skipping"
+              echo "⚠ No files found in: $FLOW_NAME — skipping"
               continue
             fi
 
             FULL_CONTENT="Artifacts collected for iFlow: $FLOW_NAME\n"
 
-            # Append all file contents
             for FILE in $FILES; do
               CONTENT=$(cat "$FILE")
               FULL_CONTENT="$FULL_CONTENT
@@ -87,16 +84,12 @@ $CONTENT
 "
             done
 
-            # Build USER_QUERY safely using heredoc (NO indentation allowed)
-            USER_QUERY=$(cat << 'EOF'
-Generate CPI iFlow documentation using the following artifacts:
+            # Build the USER_QUERY safely (no heredoc!)
+            USER_QUERY="Generate CPI iFlow documentation using the following artifacts:
 
-EOF
-)
-            USER_QUERY="$USER_QUERY
 $FULL_CONTENT"
 
-            # Build request payload (safe JSON)
+            # Build JSON payload
             PAYLOAD=$(jq -n \
               --arg sys "$SYSTEM_PROMPT" \
               --arg usr "$USER_QUERY" \
@@ -109,7 +102,6 @@ $FULL_CONTENT"
                 ]
               }')
 
-            # Call GitHub Copilot API
             RESPONSE=$(curl -s -X POST "$API_URL" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer '"$GITHUB_TOKEN"'" \
@@ -132,13 +124,12 @@ $FULL_CONTENT"
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          # If no files exist, skip commit
           if ! ls cpi-artifacts/*/*/IFlow_Summary.md >/dev/null 2>&1; then
             echo "ℹ No documentation generated — nothing to commit."
             exit 0
           fi
 
-          git add cpi-artifacts/*/*/IFlow_Summary.md 2>/dev/null || true
+          git add cpi-artifacts/*/*/IFlow_Summary.md || true
 
           if git commit -m "🤖 Copilot: Generated CPI iFlow documentation"; then
             git push
