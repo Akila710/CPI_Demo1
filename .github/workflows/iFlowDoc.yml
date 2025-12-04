@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "Enter the CPI package ID (folder in cpi-artifacts)"
+        description: "Enter the CPI package ID (folder name inside cpi-artifacts)"
         required: true
         type: string
 
@@ -43,94 +43,51 @@ jobs:
           echo "📦 Processing package: $PKG_ID"
 
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
-          Create documentation ONLY for a single iFlow's artifacts.
-          Use this 10-section structure:
-          1. High-level iFlow architecture
+          Create documentation ONLY for the CPI iFlow based on its artifacts.
+          Follow this structure:
+          1. High-level architecture
           2. Purpose
           3. Sender/Receiver systems
           4. Adapter types used
-          5. Step-by-step processing
-          6. Mapping / XSLT logic
-          7. Groovy script explanation
+          5. End-to-end processing steps
+          6. Mapping logic (XML/XSLT/json)
+          7. Groovy script logic
           8. Error handling
           9. Security/authentication
           10. Deployment notes"
 
-          # Loop through every subfolder inside the package
+          # Loop through each iFlow folder
           for FLOW_DIR in "$PKG_DIR"/*; do
 
-            # Must be a folder
             [[ -d "$FLOW_DIR" ]] || continue
 
             FLOW_NAME=$(basename "$FLOW_DIR")
             OUTPUT_FILE="$FLOW_DIR/IFlow_Summary.md"
-            echo "📝 Generating documentation for: $FLOW_NAME"
 
-            # Collect artifacts
-            FILES=$(find "$FLOW_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.groovy" -o -name "*.xslt" \))
+            echo "📝 Generating documentation for iFlow: $FLOW_NAME"
+            echo "📂 Scanning: $FLOW_DIR"
+
+            # Collect ALL files inside the iFlow folder
+            FILES=$(find "$FLOW_DIR" -type f)
 
             if [ -z "$FILES" ]; then
-              echo "⚠ No supported artifacts found in iFlow: $FLOW_NAME"
+              echo "⚠ No files found in iFlow: $FLOW_NAME — skipping"
               continue
             fi
 
-            FULL_CONTENT="Artifacts for iFlow: $FLOW_NAME\n"
+            FULL_CONTENT="Artifacts collected for iFlow: $FLOW_NAME\n"
 
+            # Append all file contents
             for FILE in $FILES; do
               CONTENT=$(cat "$FILE")
               FULL_CONTENT="$FULL_CONTENT\n--- START FILE: $FILE ---\n$CONTENT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_QUERY="Generate documentation for this CPI iFlow using the provided content below.
-            $FULL_CONTENT"
+            USER_QUERY="Generate CPI iFlow documentation using the following artifacts:
+
+$FULL_CONTENT"
 
             # Build request payload
             PAYLOAD=$(jq -n \
               --arg sys "$SYSTEM_PROMPT" \
-              --arg usr "$USER_QUERY" \
-              --arg model "$MODEL" \
-              '{
-                model: $model,
-                messages: [
-                  {role: "system", content: $sys},
-                  {role: "user", content: $usr}
-                ]
-              }')
-
-            # Call GitHub Copilot API
-            RESPONSE=$(curl -s -X POST "$API_URL" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer '"$GITHUB_TOKEN"'" \
-              -d "$PAYLOAD")
-
-            OUTPUT=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
-
-            if [[ "$OUTPUT" == "null" || -z "$OUTPUT" ]]; then
-              echo "❌ Failed to generate documentation for: $FLOW_NAME"
-              continue
-            fi
-
-            echo "$OUTPUT" > "$OUTPUT_FILE"
-            echo "✅ Created: $OUTPUT_FILE"
-
-          done
-
-      - name: Commit Documentation Safely
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-          # Check if any summary files exist
-          if ! ls cpi-artifacts/*/*/IFlow_Summary.md >/dev/null 2>&1; then
-            echo "ℹ No documentation files generated. Skipping commit."
-            exit 0
-          fi
-
-          git add cpi-artifacts/*/*/IFlow_Summary.md 2>/dev/null || true
-
-          if git commit -m "🤖 Copilot: Generated iFlow documentation"; then
-            git push
-            echo "🚀 Documentation pushed successfully."
-          else
-            echo "ℹ No changes to commit."
-          fi
+              --arg usr "$USER
