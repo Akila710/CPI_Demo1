@@ -83,9 +83,13 @@ jobs:
               FULL_CONTENT="$FULL_CONTENT\n--- START FILE: $FILE ---\n$CONTENT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_QUERY="Generate CPI iFlow documentation using the following artifacts:
+            USER_QUERY=$(cat << 'EOF'
+            Generate CPI iFlow documentation using the following artifacts:
 
-$FULL_CONTENT"
+            EOF
+            )
+            USER_QUERY="$USER_QUERY$FULL_CONTENT"
+
 
             # Build request payload
             PAYLOAD=$(jq -n \
