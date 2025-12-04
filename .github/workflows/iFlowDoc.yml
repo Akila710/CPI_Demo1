@@ -1,15 +1,15 @@
-name: 🤖 Generate Documentation Per iFlow (Groq API)
+name: 🤖 Generate iFlow Documentation (Groq)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI Package ID (folder name inside cpi-artifacts)"
+        description: "Enter CPI Package ID (folder under cpi-artifacts)"
         required: true
         type: string
 
 jobs:
-  document:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,48 +21,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Generate Documentation for Each iFlow
-        id: generate_docs
+      - name: Generate Documentation Per iFlow
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PKG_ID: ${{ github.event.inputs.package_id }}
+          PACKAGE_ID: ${{ github.event.inputs.package_id }}
         run: |
+          set -e
+
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="gpt-4o-mini"
+          MODEL="gpt-4o-mini"
 
-          PKG_DIR="cpi-artifacts/$PKG_ID"
+          PKG_DIR="cpi-artifacts/$PACKAGE_ID"
 
-          if [[ ! -d "$PKG_DIR" ]]; then
-            echo "::error:: Package folder not found: $PKG_DIR"
+          if [ ! -d "$PKG_DIR" ]; then
+            echo "::error:: Package not found: $PKG_DIR"
             exit 1
           fi
 
-          echo "📦 Processing package: $PKG_ID"
+          echo "📦 Processing package: $PACKAGE_ID"
 
-          # Loop through each iFlow folder
-          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
-          while IFS= read -r -d '' IFLOW_PATH; do
+          # Create SYSTEM_PROMPT safely
+          SYSTEM_PROMPT=$(cat << 'EOF'
+You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
 
-            IFLOW_NAME=$(basename "$IFLOW_PATH")
-            echo "➡ Generating documentation for iFlow: $IFLOW_NAME"
-
-            OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
-
-            FULL_CONTENT=""
-            FILES=$(find "$IFLOW_PATH" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' \))
-
-            if [[ -z "$FILES" ]]; then
-              echo "⚠ No supported artifacts found for $IFLOW_NAME. Skipping."
-              continue
-            fi
-
-            for FILE in $FILES; do
-              CONTENT=$(cat "$FILE")
-              FULL_CONTENT+="\n\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
-            done
-
-            SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed documentation for this SINGLE iFlow using the provided artifacts.
-Use EXACTLY this structure:
+Use EXACTLY this 10-section structure:
 
 1. High-level architecture  
 2. Purpose of the iFlow  
@@ -74,26 +56,57 @@ Use EXACTLY this structure:
 8. Error handling  
 9. Security/authentication  
 10. Deployment notes  
-"
+EOF
+)
 
-            USER_QUERY="Analyze all artifacts from the iFlow '$IFLOW_NAME' and produce full documentation.
+          # Loop through iFlows inside package
+          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
+          while IFS= read -r -d '' IFLOW_PATH; do
+            IFLOW_NAME=$(basename "$IFLOW_PATH")
+            echo "➡ Processing iFlow: $IFLOW_NAME"
+
+            OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
+
+            # Collect artifacts
+            CONTENT=""
+            FILES=$(find "$IFLOW_PATH" -type f \( -name "iFlowContent.xml" -o -name "*.groovy" -o -name "*.xslt" \))
+
+            if [ -z "$FILES" ]; then
+              echo "⚠ No supported artifacts in $IFLOW_NAME. Skipping."
+              continue
+            fi
+
+            for FILE in $FILES; do
+              CONTENT+="\n--- START ARTIFACT: $FILE ---\n"
+              CONTENT+="$(cat "$FILE")"
+              CONTENT+="\n--- END ARTIFACT: $FILE ---\n"
+            done
+
+            # Build user message
+            USER_MESSAGE=$(cat << EOF
+Analyze all artifacts from iFlow "$IFLOW_NAME" and generate full documentation.
+
 \`\`\`text
-$FULL_CONTENT
-\`\`\`"
+$CONTENT
+\`\`\`
+EOF
+)
 
+            # Build payload
             PAYLOAD=$(jq -n \
-              --arg system "$SYSTEM_PROMPT" \
-              --arg query "$USER_QUERY" \
-              --arg model "$MODEL_NAME" \
+              --arg model "$MODEL" \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_MESSAGE" \
               '{
                 model: $model,
                 messages: [
-                  {role: "system", content: $system},
-                  {role: "user", content: $query}
+                  {role: "system", content: $sys},
+                  {role: "user", content: $usr}
                 ],
                 temperature: 0.1
               }')
 
+            # API Call
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
@@ -101,18 +114,18 @@ $FULL_CONTENT
 
             DOC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-            if [[ "$DOC" == "null" || -z "$DOC" ]]; then
-              echo "❌ Groq API failed for iFlow $IFLOW_NAME"
+            if [ -z "$DOC" ] || [ "$DOC" == "null" ]; then
+              echo "❌ Groq API failed for: $IFLOW_NAME"
               echo "Response: $RESPONSE"
               continue
             fi
 
             echo "$DOC" > "$OUTPUT_FILE"
-            echo "  ✅ Saved documentation: $OUTPUT_FILE"
+            echo "  ✅ Saved documentation → $OUTPUT_FILE"
 
           done
 
-      - name: Commit Documentation Changes
+      - name: Commit Changes
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -120,9 +133,9 @@ $FULL_CONTENT
           git add cpi-artifacts/**/iFlow_Documentation.md
 
           if git diff --cached --quiet; then
-            echo "ℹ No new documentation generated."
+            echo "ℹ No changes to commit."
           else
-            git commit -m "🤖 Auto-generated iFlow documentation using Groq API (gpt-4o-mini)"
+            git commit -m "🤖 Auto-generated iFlow documentation via Groq"
             git push
             echo "✅ Documentation committed."
           fi
