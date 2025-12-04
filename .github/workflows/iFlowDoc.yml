@@ -4,124 +4,136 @@ on:
   workflow_dispatch:
 
 jobs:
-  sync_and_document:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
-    # -------------------------------------------------------
-    # CHECKOUT REPOSITORY
-    # -------------------------------------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      # ---------------------------------------------------------
+      # CHECKOUT REPOSITORY
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # -------------------------------------------------------
-    # INSTALL TOOLS
-    # -------------------------------------------------------
-    - name: Install jq & curl
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y jq curl unzip
+      # ---------------------------------------------------------
+      # INSTALL DEPENDENCIES (curl, jq)
+      # ---------------------------------------------------------
+      - name: Install Dependencies for CPI API Calls
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
 
-    # -------------------------------------------------------
-    # FETCH PACKAGE LIST FROM CPI
-    # -------------------------------------------------------
-    - name: Fetch Package List (Dynamic)
-      id: packages
-      env:
-        TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-        CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-      run: |
-        echo "Getting OAuth Token..."
-        TOKEN=$(curl -s -X POST "https://${OAUTH_HOST}/oauth/token" \
-          -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "grant_type=client_credentials&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}" \
-          | jq -r '.access_token')
+      # ---------------------------------------------------------
+      # FETCH PACKAGE LIST FROM SAP CPI
+      # ---------------------------------------------------------
+      - name: Dynamic Fetch and Normalize Package List
+        id: normalize
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          echo "🔑 Requesting OAuth Token..."
+          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
 
-        if [ "$TOKEN" = "null" ]; then
-          echo "::error::Failed to fetch OAuth token!"
-          exit 1
-        fi
+          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
 
-        echo "Fetching packages..."
-        RES=$(curl -s -H "Authorization: Bearer $TOKEN" \
-            "https://${TMN_HOST}/api/v1/IntegrationPackages?\$format=json")
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
 
-        PKGS=$(echo "$RES" | jq -r ".d.results[].Id" | tr '\n' ' ')
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Failed to retrieve access token."
+            echo "Raw: $AUTH_RESPONSE"
+            exit 1
+          fi
 
-        echo "Found packages: $PKGS"
-        echo "list=$PKGS" >> $GITHUB_OUTPUT
+          echo "🔍 Fetching package list..."
+          API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
 
-    # -------------------------------------------------------
-    # SYNC EACH PACKAGE (CPI → GITHUB)
-    # -------------------------------------------------------
-    - name: Sync Packages using FlashPipe
-      env:
-        TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-        CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-      run: |
-        docker run --rm \
-          --user $(id -u):$(id -g) \
-          -v "${GITHUB_WORKSPACE}:/workspace" \
-          -w /workspace \
-          -e TMN_HOST="$TMN_HOST" \
-          -e OAUTH_HOST="$OAUTH_HOST" \
-          -e CLIENT_ID="$CLIENT_ID" \
-          -e CLIENT_SECRET="$CLIENT_SECRET" \
-          engswee/flashpipe:latest \
-          sh -c '
-            for PKG in ${{ steps.packages.outputs.list }}; do
-              echo "Syncing package: $PKG"
-              flashpipe sync \
-                --tmn-host "$TMN_HOST" \
-                --oauth-host "$OAUTH_HOST" \
-                --oauth-clientid "$CLIENT_ID" \
-                --oauth-clientsecret "$CLIENT_SECRET" \
-                --package-id "$PKG" \
-                --dir-artifacts "cpi-artifacts/$PKG" \
-                --sync-package-details
+          PACKAGE_RESPONSE=$(curl -s -X GET "$API_URL" -H "Authorization: Bearer $TOKEN")
+
+          PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" | jq -r ".d.results[].Id" | tr '\n' ' ')
+
+          if [ -z "$PACKAGE_IDS" ]; then
+            echo "::warning::No packages found!"
+            exit 0
+          fi
+
+          echo "Found packages: $PACKAGE_IDS"
+          echo "packages=$PACKAGE_IDS" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------------
+      # RUN FLASHPIPE (SYNC FROM CPI -> GITHUB)
+      # ---------------------------------------------------------
+      - name: Run FlashPipe inside Docker (Sync Packages)
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            -e TMN_HOST="$TMN_HOST" \
+            -e OAUTH_HOST="$OAUTH_HOST" \
+            -e CLIENT_ID="$CLIENT_ID" \
+            -e CLIENT_SECRET="$CLIENT_SECRET" \
+            engswee/flashpipe:latest \
+            sh -c '
+              for PKG in ${{ steps.normalize.outputs.packages }}; do
+                echo "➡ Syncing $PKG..."
+                flashpipe sync \
+                  --tmn-host "$TMN_HOST" \
+                  --oauth-host "$OAUTH_HOST" \
+                  --oauth-clientid "$CLIENT_ID" \
+                  --oauth-clientsecret "$CLIENT_SECRET" \
+                  --package-id "$PKG" \
+                  --dir-artifacts "cpi-artifacts/$PKG" \
+                  --sync-package-details
+              done
+            '
+
+      # ---------------------------------------------------------
+      # AI DOCUMENTATION GENERATION (USING YOUR DOCUMENTATION IFLOW)
+      # ---------------------------------------------------------
+      - name: Generate Documentation for Each iFlow
+        env:
+          DOC_IFLOW_URL: ${{ secrets.DOC_IFLOW_URL }}
+          DOC_IFLOW_USER: ${{ secrets.DOC_IFLOW_USER }}
+          DOC_IFLOW_PASS: ${{ secrets.DOC_IFLOW_PASS }}
+        run: |
+          echo "📝 Starting AI documentation generation..."
+
+          for PKG in ${{ steps.normalize.outputs.packages }}; do
+            PKG_DIR="cpi-artifacts/$PKG"
+
+            # loop ONLY directories (iFlows)
+            for FLOW in $(find "$PKG_DIR" -maxdepth 1 -mindepth 1 -type d -printf "%f\n"); do
+
+              echo "➡ Documenting: $PKG / $FLOW"
+
+              RESPONSE=$(curl -s -X POST "$DOC_IFLOW_URL" \
+                -u "$DOC_IFLOW_USER:$DOC_IFLOW_PASS" \
+                -H "Content-Type: application/json" \
+                -d "{\"packageId\": \"${PKG}\", \"artifactId\": \"${FLOW}\"}")
+
+              DOC_PATH="$PKG_DIR/$FLOW/Documentation.md"
+              echo "$RESPONSE" > "$DOC_PATH"
+
+              echo "✔ Saved documentation → $DOC_PATH"
             done
-          '
-
-    # -------------------------------------------------------
-    # AUTO GENERATE DOCUMENTATION USING YOUR CPI IFLOW
-    # -------------------------------------------------------
-    - name: Generate Documentation for Each iFlow
-      env:
-        DOC_IFLOW_URL: ${{ secrets.DOC_IFLOW_URL }}        # <--- your CPI iFlow endpoint
-        DOC_IFLOW_USER: ${{ secrets.DOC_IFLOW_USER }}
-        DOC_IFLOW_PASS: ${{ secrets.DOC_IFLOW_PASS }}
-      run: |
-        echo "Starting Document Generation..."
-
-        for PKG in ${{ steps.packages.outputs.list }}; do
-          PKG_DIR="cpi-artifacts/$PKG"
-
-          for FLOW in $(ls "$PKG_DIR"); do
-            echo "Documenting: $PKG / $FLOW"
-
-            RESPONSE=$(curl -s -X POST "$DOC_IFLOW_URL" \
-               -u "$DOC_IFLOW_USER:$DOC_IFLOW_PASS" \
-               -H "Content-Type: application/json" \
-               -d "{\"packageId\": \"${PKG}\", \"artifactId\": \"${FLOW}\"}")
-
-            DOC_PATH="$PKG_DIR/$FLOW/Documentation.md"
-            echo "$RESPONSE" > "$DOC_PATH"
-
-            echo "✔ Documentation saved: $DOC_PATH"
           done
-        done
 
-    # -------------------------------------------------------
-    # COMMIT CHANGES BACK TO GITHUB
-    # -------------------------------------------------------
-    - name: Commit & push updates
-      run: |
-        git config user.name "github-actions"
-        git config user.email "actions@github.com"
-        git add .
-        git commit -m "Synced CPI Packages & Auto-Generated Documentation" || echo "No changes"
-        git push || true
+      # ---------------------------------------------------------
+      # COMMIT DOCUMENTS + SYNC CHANGES TO REPOSITORY
+      # ---------------------------------------------------------
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "CPI Sync + Documentation Update" || echo "No changes"
+          git push || true
