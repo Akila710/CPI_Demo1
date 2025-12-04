@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "Enter the CPI package ID (folder name inside cpi-artifacts)"
+        description: "Enter the CPI package ID (folder in cpi-artifacts)"
         required: true
         type: string
 
@@ -65,7 +65,7 @@ jobs:
             OUTPUT_FILE="$FLOW_DIR/IFlow_Summary.md"
 
             echo "📝 Generating documentation for iFlow: $FLOW_NAME"
-            echo "📂 Scanning: $FLOW_DIR"
+            echo "📂 Scanning folder: $FLOW_DIR"
 
             # Collect ALL files inside the iFlow folder
             FILES=$(find "$FLOW_DIR" -type f)
@@ -80,18 +80,69 @@ jobs:
             # Append all file contents
             for FILE in $FILES; do
               CONTENT=$(cat "$FILE")
-              FULL_CONTENT="$FULL_CONTENT\n--- START FILE: $FILE ---\n$CONTENT\n--- END FILE: $FILE ---\n"
+              FULL_CONTENT="$FULL_CONTENT
+--- START FILE: $FILE ---
+$CONTENT
+--- END FILE: $FILE ---
+"
             done
 
+            # Build USER_QUERY safely using heredoc (NO indentation allowed)
             USER_QUERY=$(cat << 'EOF'
-            Generate CPI iFlow documentation using the following artifacts:
+Generate CPI iFlow documentation using the following artifacts:
 
-            EOF
-            )
-            USER_QUERY="$USER_QUERY$FULL_CONTENT"
+EOF
+)
+            USER_QUERY="$USER_QUERY
+$FULL_CONTENT"
 
-
-            # Build request payload
+            # Build request payload (safe JSON)
             PAYLOAD=$(jq -n \
               --arg sys "$SYSTEM_PROMPT" \
-              --arg usr "$USER
+              --arg usr "$USER_QUERY" \
+              --arg model "$MODEL" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: $sys},
+                  {role: "user", content: $usr}
+                ]
+              }')
+
+            # Call GitHub Copilot API
+            RESPONSE=$(curl -s -X POST "$API_URL" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer '"$GITHUB_TOKEN"'" \
+              -d "$PAYLOAD")
+
+            OUTPUT=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
+
+            if [[ "$OUTPUT" == "null" || -z "$OUTPUT" ]]; then
+              echo "❌ Failed to generate documentation for: $FLOW_NAME"
+              continue
+            fi
+
+            echo "$OUTPUT" > "$OUTPUT_FILE"
+            echo "✅ Documentation created: $OUTPUT_FILE"
+
+          done
+
+      - name: Commit Documentation
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          # If no files exist, skip commit
+          if ! ls cpi-artifacts/*/*/IFlow_Summary.md >/dev/null 2>&1; then
+            echo "ℹ No documentation generated — nothing to commit."
+            exit 0
+          fi
+
+          git add cpi-artifacts/*/*/IFlow_Summary.md 2>/dev/null || true
+
+          if git commit -m "🤖 Copilot: Generated CPI iFlow documentation"; then
+            git push
+            echo "🚀 Documentation committed and pushed."
+          else
+            echo "ℹ No changes detected."
+          fi
