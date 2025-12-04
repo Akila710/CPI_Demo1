@@ -40,8 +40,7 @@ jobs:
           echo "📦 Processing package: $PACKAGE_ID"
 
           # SAFE SYSTEM PROMPT (NO HEREDOC, YAML SAFE)
-          SYSTEM_PROMPT="
-You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
 
 Use EXACTLY this 10-section structure:
 
