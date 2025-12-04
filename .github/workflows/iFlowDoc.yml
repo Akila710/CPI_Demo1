@@ -80,12 +80,11 @@ jobs:
             done
 
             USER_MESSAGE="
-Analyze all artifacts from iFlow '$IFLOW_NAME' and generate complete documentation.
+            Analyze all artifacts from iFlow '$IFLOW_NAME' and generate complete documentation.
 
-\`\`\`text
-$CONTENT
-\`\`\`
-"
+           \`\`\`text
+           $CONTENT
+           \`\`\`"
 
             # Build JSON payload
             PAYLOAD=$(jq -n \
