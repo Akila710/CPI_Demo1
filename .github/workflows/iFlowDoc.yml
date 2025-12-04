@@ -41,19 +41,19 @@ jobs:
 
           # SAFE SYSTEM PROMPT (NO HEREDOC, YAML SAFE)
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
+          
+          Use EXACTLY this 10-section structure:
 
-Use EXACTLY this 10-section structure:
-1. High-level architecture
-2. Purpose of the iFlow
-3. Sender/Receiver systems
-4. Adapter types used
-5. Step-by-step flow logic
-6. Mapping logic
-7. Groovy scripts explanation
-8. Error handling
-9. Security/authentication
-10. Deployment notes
-"
+          1. High-level architecture
+          2. Purpose of the iFlow
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow logic
+          6. Mapping logic
+          7. Groovy scripts explanation
+          8. Error handling
+          9. Security/authentication
+          10. Deployment notes"
 
           # Loop through each iFlow folder
           find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
