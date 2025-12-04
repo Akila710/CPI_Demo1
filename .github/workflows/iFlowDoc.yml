@@ -38,16 +38,16 @@ jobs:
           echo "Processing package: $PKG"
 
           PROMPT="You are a senior SAP CPI Technical Architect. Create documentation for this iFlow. Use these sections:
-1. High-level architecture
-2. Purpose
-3. Sender/Receiver systems
-4. Adapters used
-5. Step-by-step logic
-6. Mapping logic
-7. Groovy script explanation
-8. Error handling
-9. Security/authentication
-10. Deployment notes"
+          1. High-level architecture
+          2. Purpose
+          3. Sender/Receiver systems
+          4. Adapters used
+          5. Step-by-step logic
+          6. Mapping logic
+          7. Groovy script explanation
+          8. Error handling
+          9. Security/authentication
+          10. Deployment notes"
 
           for IFLOW in "$ROOT"/*; do
             [[ -d "$IFLOW" ]] || continue
