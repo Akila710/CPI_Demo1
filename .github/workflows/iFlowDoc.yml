@@ -1,148 +1,127 @@
-name: 🤖 Generate Documentation for Each iFlow (GitHub Copilot – No OpenAI Key)
+name: 🤖 Generate Documentation Per iFlow
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "Package folder inside cpi-artifacts"
+        description: "CPI Package ID (folder name inside cpi-artifacts)"
         required: true
         type: string
 
 jobs:
-  generate_docs:
+  document:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install jq
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq file
+          sudo apt-get install -y jq
 
-      - name: Generate documentation using Copilot Models
+      - name: Generate Documentation for Each iFlow
+        id: generate_docs
         env:
-          PKG: ${{ github.event.inputs.package_id }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          API_URL="https://models.inference.ai/github/v1/chat/completions"
-          MODEL="gpt-4o-mini"
-          ROOT="cpi-artifacts/$PKG"
-          MAX_SIZE=200000    # Limit total content per iFlow to prevent exit code 6
+          API_URL="https://api.openai.com/v1/chat/completions"
+          MODEL_NAME="gpt-4o-mini"
 
-          if [[ ! -d "$ROOT" ]]; then
-            echo "::error:: Package folder not found: $ROOT"
+          PKG_DIR="cpi-artifacts/$PKG_ID"
+
+          if [[ ! -d "$PKG_DIR" ]]; then
+            echo "::error:: Package folder not found: $PKG_DIR"
             exit 1
           fi
 
-          echo "📦 Processing package: $PKG"
+          echo "📦 Processing package: $PKG_ID"
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create documentation for this iFlow. Use these sections:
+          # Loop through all iFlow folders
+          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
+          while IFS= read -r -d '' IFLOW_PATH; do
+
+            IFLOW_NAME=$(basename "$IFLOW_PATH")
+            echo "➡ Generating documentation for iFlow: $IFLOW_NAME"
+
+            OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
+
+            # Collect artifacts
+            FULL_CONTENT=""
+            FILES=$(find "$IFLOW_PATH" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' \) )
+
+            if [[ -z "$FILES" ]]; then
+              echo "⚠ No supported artifacts found for $IFLOW_NAME. Skipping."
+              continue
+            fi
+
+            for FILE in $FILES; do
+              CONTENT=$(cat "$FILE")
+              FULL_CONTENT+="\n\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
+            done
+
+            SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed documentation for a SINGLE iFlow using the artifacts provided.
+Use EXACTLY this structure:
+
 1. High-level architecture
-2. Purpose
+2. Purpose of the iFlow
 3. Sender/Receiver systems
-4. Adapters used
+4. Adapter types used
 5. Step-by-step flow logic
 6. Mapping logic
-7. Groovy script explanation
+7. Groovy scripts explanation
 8. Error handling
 9. Security/authentication
 10. Deployment notes"
 
-          # Loop each iFlow folder
-          for DIR in "$ROOT"/*; do
-            [[ -d "$DIR" ]] || continue
-
-            NAME=$(basename "$DIR")
-            OUT="$DIR/IFlow_Summary.md"
-            CONTENTS="Collected artifacts for $NAME:\n"
-
-            echo "📝 Processing iFlow: $NAME"
-
-            # SAFELY scan only CPI-relevant files
-            while IFS= read -r -d '' FILE; do
-
-              # Skip large files > 50 KB
-              if [[ $(stat -c%s "$FILE") -gt 50000 ]]; then
-                echo "⚠️ Skipping large file: $FILE"
-                continue
-              fi
-
-              # Skip binary files (jar, pdf, images)
-              MIME=$(file -b --mime-type "$FILE")
-              case "$MIME" in
-                text/*|application/xml|application/json)
-                  ;;
-                *)
-                  echo "⚠️ Skipping binary file: $FILE"
-                  continue
-                  ;;
-              esac
-
-              # Stop collecting if total exceeds safety limit
-              if [[ ${#CONTENTS} -gt $MAX_SIZE ]]; then
-                echo "⚠️ Content too large for $NAME. Stopping file load."
-                break
-              fi
-
-              DATA=$(cat "$FILE")
-              CONTENTS="$CONTENTS
---- FILE: $FILE ---
-$DATA
---- END FILE ---
-"
-            done < <(find "$DIR" \( -name "*.groovy" -o -name "*.xml" -o -name "*.json" -o -name "*.xslt" \) -type f -print0)
-
-            # No content found? Skip
-            if [[ "$CONTENTS" == "Collected artifacts for $NAME:\n" ]]; then
-              echo "⚠️ No usable artifacts found for $NAME — skipping"
-              continue
-            fi
-
-            QUERY="Generate CPI iFlow documentation using these artifacts:\n\n$CONTENTS"
+            USER_QUERY="Analyze all artifacts from the iFlow '$IFLOW_NAME' and produce documentation.
+\`\`\`text
+$FULL_CONTENT
+\`\`\`"
 
             PAYLOAD=$(jq -n \
-              --arg model "$MODEL" \
-              --arg sys "$SYSTEM_PROMPT" \
-              --arg usr "$QUERY" \
+              --arg system "$SYSTEM_PROMPT" \
+              --arg query "$USER_QUERY" \
+              --arg model "$MODEL_NAME" \
               '{
                 model: $model,
                 messages: [
-                  {"role": "system", "content": $sys},
-                  {"role": "user",  "content": $usr}
-                ]
+                  {role: "system", content: $system},
+                  {role: "user", content: $query}
+                ],
+                temperature: 0.1
               }')
 
             RESPONSE=$(curl -s -X POST "$API_URL" \
-              -H "Authorization: Bearer '"$TOKEN"'" \
               -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
               -d "$PAYLOAD")
 
-            OUTPUT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+            DOC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-            if [[ -z "$OUTPUT" ]]; then
-              echo "❌ Failed to generate documentation for $NAME"
+            if [[ "$DOC" == "null" || -z "$DOC" ]]; then
+              echo "❌ API failed for iFlow $IFLOW_NAME"
               continue
             fi
 
-            echo "$OUTPUT" > "$OUT"
-            echo "✅ Documentation saved: $OUT"
+            echo "$DOC" > "$OUTPUT_FILE"
+            echo "  ✅ Saved: $OUTPUT_FILE"
 
           done
 
-      - name: Commit documentation
+      - name: Commit Changes
         run: |
-          git config user.name "GitHub Actions"
+          git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          git add cpi-artifacts/*/*/IFlow_Summary.md || true
+          git add cpi-artifacts/**/iFlow_Documentation.md
 
-          if git commit -m "🤖 Copilot: Generated CPI iFlow documentation"; then
-            git push
+          if git diff --cached --quiet; then
+            echo "ℹ No new documentation generated."
           else
-            echo "ℹ️ No new documentation to commit"
+            git commit -m "🤖 Auto-generated iFlow documentation using GPT-4o-mini"
+            git push
+            echo "✅ Documentation committed."
           fi
