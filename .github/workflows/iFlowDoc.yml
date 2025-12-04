@@ -1,4 +1,4 @@
-name: 🤖 Generate Documentation Per iFlow
+name: 🤖 Generate Documentation Per iFlow (Groq API)
 
 on:
   workflow_dispatch:
@@ -24,10 +24,10 @@ jobs:
       - name: Generate Documentation for Each iFlow
         id: generate_docs
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          API_URL="https://api.openai.com/v1/chat/completions"
+          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="gpt-4o-mini"
 
           PKG_DIR="cpi-artifacts/$PKG_ID"
@@ -39,7 +39,7 @@ jobs:
 
           echo "📦 Processing package: $PKG_ID"
 
-          # Loop through all iFlow folders
+          # Loop through each iFlow folder
           find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
           while IFS= read -r -d '' IFLOW_PATH; do
 
@@ -48,9 +48,8 @@ jobs:
 
             OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
 
-            # Collect artifacts
             FULL_CONTENT=""
-            FILES=$(find "$IFLOW_PATH" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' \) )
+            FILES=$(find "$IFLOW_PATH" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' \))
 
             if [[ -z "$FILES" ]]; then
               echo "⚠ No supported artifacts found for $IFLOW_NAME. Skipping."
@@ -62,21 +61,22 @@ jobs:
               FULL_CONTENT+="\n\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
             done
 
-            SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed documentation for a SINGLE iFlow using the artifacts provided.
+            SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create detailed documentation for this SINGLE iFlow using the provided artifacts.
 Use EXACTLY this structure:
 
-1. High-level architecture
-2. Purpose of the iFlow
-3. Sender/Receiver systems
-4. Adapter types used
-5. Step-by-step flow logic
-6. Mapping logic
-7. Groovy scripts explanation
-8. Error handling
-9. Security/authentication
-10. Deployment notes"
+1. High-level architecture  
+2. Purpose of the iFlow  
+3. Sender/Receiver systems  
+4. Adapter types used  
+5. Step-by-step flow logic  
+6. Mapping logic  
+7. Groovy scripts explanation  
+8. Error handling  
+9. Security/authentication  
+10. Deployment notes  
+"
 
-            USER_QUERY="Analyze all artifacts from the iFlow '$IFLOW_NAME' and produce documentation.
+            USER_QUERY="Analyze all artifacts from the iFlow '$IFLOW_NAME' and produce full documentation.
 \`\`\`text
 $FULL_CONTENT
 \`\`\`"
@@ -94,24 +94,25 @@ $FULL_CONTENT
                 temperature: 0.1
               }')
 
-            RESPONSE=$(curl -s -X POST "$API_URL" \
+            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
               -d "$PAYLOAD")
 
             DOC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
             if [[ "$DOC" == "null" || -z "$DOC" ]]; then
-              echo "❌ API failed for iFlow $IFLOW_NAME"
+              echo "❌ Groq API failed for iFlow $IFLOW_NAME"
+              echo "Response: $RESPONSE"
               continue
             fi
 
             echo "$DOC" > "$OUTPUT_FILE"
-            echo "  ✅ Saved: $OUTPUT_FILE"
+            echo "  ✅ Saved documentation: $OUTPUT_FILE"
 
           done
 
-      - name: Commit Changes
+      - name: Commit Documentation Changes
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -121,7 +122,7 @@ $FULL_CONTENT
           if git diff --cached --quiet; then
             echo "ℹ No new documentation generated."
           else
-            git commit -m "🤖 Auto-generated iFlow documentation using GPT-4o-mini"
+            git commit -m "🤖 Auto-generated iFlow documentation using Groq API (gpt-4o-mini)"
             git push
             echo "✅ Documentation committed."
           fi
