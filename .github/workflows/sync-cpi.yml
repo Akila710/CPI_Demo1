@@ -70,4 +70,40 @@ jobs:
       - name: Run FlashPipe inside Docker (Sync Packages)
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ sec_
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          docker run --rm \
+            --user $(id -u):$(id -g) \
+            -v "${GITHUB_WORKSPACE}:/workspace" \
+            -w /workspace \
+            -e TMN_HOST="$TMN_HOST" \
+            -e OAUTH_HOST="$OAUTH_HOST" \
+            -e CLIENT_ID="$CLIENT_ID" \
+            -e CLIENT_SECRET="$CLIENT_SECRET" \
+            engswee/flashpipe:latest \
+            sh -c '
+              for PKG in ${{ steps.normalize.outputs.packages }}; do
+                echo "➡ Syncing $PKG..."
+                flashpipe sync \
+                  --tmn-host "$TMN_HOST" \
+                  --oauth-host "$OAUTH_HOST" \
+                  --oauth-clientid "$CLIENT_ID" \
+                  --oauth-clientsecret "$CLIENT_SECRET" \
+                  --package-id "$PKG" \
+                  --dir-artifacts "cpi-artifacts/$PKG" \
+                  --sync-package-details
+              done
+            '
+
+      # ---------------------------------------------------
+      # COMMIT & PUSH CHANGES
+      # ---------------------------------------------------
+      - name: Commit & push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Automated CPI package sync (dynamic list via API)" || echo "No changes"
+          git push || true
