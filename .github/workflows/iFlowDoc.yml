@@ -39,4 +39,99 @@ jobs:
 
           echo "📦 Processing package: $PACKAGE_ID"
 
-          # SAFE SYSTEM PROMPT USING H
+          # SAFE SYSTEM PROMPT (NO HEREDOC, YAML SAFE)
+          SYSTEM_PROMPT="
+You are a senior SAP CPI Technical Architect. Create detailed technical documentation for ONE iFlow based on the provided artifacts.
+
+Use EXACTLY this 10-section structure:
+
+1. High-level architecture
+2. Purpose of the iFlow
+3. Sender/Receiver systems
+4. Adapter types used
+5. Step-by-step flow logic
+6. Mapping logic
+7. Groovy scripts explanation
+8. Error handling
+9. Security/authentication
+10. Deployment notes
+"
+
+          # Loop through each iFlow folder
+          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
+          while IFS= read -r -d '' IFLOW_PATH; do
+
+            IFLOW_NAME=$(basename "$IFLOW_PATH")
+            echo "➡ Processing iFlow: $IFLOW_NAME"
+
+            OUTPUT_FILE="$IFLOW_PATH/iFlow_Documentation.md"
+
+            # Collect artifacts
+            CONTENT=""
+            FILES=$(find "$IFLOW_PATH" -type f \( -name "iFlowContent.xml" -o -name "*.groovy" -o -name "*.xslt" \))
+
+            if [ -z "$FILES" ]; then
+              echo "⚠ No supported artifacts in $IFLOW_NAME. Skipping."
+              continue
+            fi
+
+            for FILE in $FILES; do
+              CONTENT+="\n--- START ARTIFACT: $FILE ---\n"
+              CONTENT+="$(cat "$FILE")"
+              CONTENT+="\n--- END ARTIFACT: $FILE ---\n"
+            done
+
+            USER_MESSAGE="
+Analyze all artifacts from iFlow '$IFLOW_NAME' and generate complete documentation.
+
+\`\`\`text
+$CONTENT
+\`\`\`
+"
+
+            # Build JSON payload
+            PAYLOAD=$(jq -n \
+              --arg model "$MODEL" \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_MESSAGE" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: $sys},
+                  {role: "user", content: $usr}
+                ],
+                temperature: 0.1
+              }')
+
+            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+              -d "$PAYLOAD")
+
+            DOC=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+
+            if [ -z "$DOC" ] || [ "$DOC" == "null" ]; then
+              echo "❌ Groq API failed for: $IFLOW_NAME"
+              echo "Response: $RESPONSE"
+              continue
+            fi
+
+            echo "$DOC" > "$OUTPUT_FILE"
+            echo "  ✅ Saved documentation → $OUTPUT_FILE"
+
+          done
+
+      - name: Commit Documentation Changes
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git add cpi-artifacts/**/iFlow_Documentation.md
+
+          if git diff --cached --quiet; then
+            echo "ℹ No new documentation to commit."
+          else
+            git commit -m "🤖 Auto-generated iFlow documentation via Groq API"
+            git push
+            echo "✅ Documentation committed."
+          fi
