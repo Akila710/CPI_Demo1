@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "Folder name inside cpi-artifacts"
+        description: "Package folder inside cpi-artifacts"
         required: true
         type: string
 
@@ -31,8 +31,8 @@ jobs:
         run: |
           API_URL="https://models.inference.ai/github/v1/chat/completions"
           MODEL="gpt-4o-mini"
-
           ROOT="cpi-artifacts/$PKG"
+          MAX_SIZE=200000    # Limit total content per iFlow to prevent exit code 6
 
           if [[ ! -d "$ROOT" ]]; then
             echo "::error:: Package folder not found: $ROOT"
@@ -41,22 +41,39 @@ jobs:
 
           echo "📦 Processing package: $PKG"
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create clear documentation for this iFlow. Follow this structure:\n1. High-level architecture\n2. Purpose\n3. Sender/Receiver systems\n4. Adapters used\n5. Step-by-step flow logic\n6. Mapping logic\n7. Groovy script explanation\n8. Error handling\n9. Security/authentication\n10. Deployment notes"
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create documentation for this iFlow. Use these sections:
+1. High-level architecture
+2. Purpose
+3. Sender/Receiver systems
+4. Adapters used
+5. Step-by-step flow logic
+6. Mapping logic
+7. Groovy script explanation
+8. Error handling
+9. Security/authentication
+10. Deployment notes"
 
+          # Loop each iFlow folder
           for DIR in "$ROOT"/*; do
             [[ -d "$DIR" ]] || continue
 
             NAME=$(basename "$DIR")
             OUT="$DIR/IFlow_Summary.md"
+            CONTENTS="Collected artifacts for $NAME:\n"
 
             echo "📝 Processing iFlow: $NAME"
 
-            CONTENTS="Collected artifacts for $NAME:\n"
-
-            # Find all files safely (skip binaries)
+            # SAFELY scan only CPI-relevant files
             while IFS= read -r -d '' FILE; do
-              MIME=$(file -b --mime-type "$FILE")
 
+              # Skip large files > 50 KB
+              if [[ $(stat -c%s "$FILE") -gt 50000 ]]; then
+                echo "⚠️ Skipping large file: $FILE"
+                continue
+              fi
+
+              # Skip binary files (jar, pdf, images)
+              MIME=$(file -b --mime-type "$FILE")
               case "$MIME" in
                 text/*|application/xml|application/json)
                   ;;
@@ -66,14 +83,28 @@ jobs:
                   ;;
               esac
 
+              # Stop collecting if total exceeds safety limit
+              if [[ ${#CONTENTS} -gt $MAX_SIZE ]]; then
+                echo "⚠️ Content too large for $NAME. Stopping file load."
+                break
+              fi
+
               DATA=$(cat "$FILE")
-              CONTENTS="$CONTENTS\n--- FILE: $FILE ---\n$DATA\n--- END FILE ---\n"
+              CONTENTS="$CONTENTS
+--- FILE: $FILE ---
+$DATA
+--- END FILE ---
+"
+            done < <(find "$DIR" \( -name "*.groovy" -o -name "*.xml" -o -name "*.json" -o -name "*.xslt" \) -type f -print0)
 
-            done < <(find "$DIR" -type f -print0)
+            # No content found? Skip
+            if [[ "$CONTENTS" == "Collected artifacts for $NAME:\n" ]]; then
+              echo "⚠️ No usable artifacts found for $NAME — skipping"
+              continue
+            fi
 
-            QUERY="Generate CPI iFlow documentation using the following artifacts:\n\n$CONTENTS"
+            QUERY="Generate CPI iFlow documentation using these artifacts:\n\n$CONTENTS"
 
-            # Build request for GitHub Copilot Model
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -82,7 +113,7 @@ jobs:
                 model: $model,
                 messages: [
                   {"role": "system", "content": $sys},
-                  {"role": "user", "content": $usr}
+                  {"role": "user",  "content": $usr}
                 ]
               }')
 
@@ -94,25 +125,24 @@ jobs:
             OUTPUT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
 
             if [[ -z "$OUTPUT" ]]; then
-              echo "❌ Could not generate documentation for: $NAME"
+              echo "❌ Failed to generate documentation for $NAME"
               continue
             fi
 
             echo "$OUTPUT" > "$OUT"
-            echo "✅ Documentation written: $OUT"
+            echo "✅ Documentation saved: $OUT"
 
           done
 
       - name: Commit documentation
         run: |
-          git config user.name "github-actions"
+          git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
           git add cpi-artifacts/*/*/IFlow_Summary.md || true
 
-          if git commit -m "🤖 Copilot: Generated iFlow documentation"; then
+          if git commit -m "🤖 Copilot: Generated CPI iFlow documentation"; then
             git push
-            echo "🚀 Documentation pushed"
           else
-            echo "ℹ️ No changes to commit"
+            echo "ℹ️ No new documentation to commit"
           fi
