@@ -1,166 +1,123 @@
-name: Sync CPI Packages + Generate Documentation
+name: 🤖 Generate Documentation for Each iFlow (GitHub Copilot)
 
 on:
   workflow_dispatch:
+    inputs:
+      package_id:
+        description: "Enter the CPI package ID (folder name inside cpi-artifacts)"
+        required: true
+        type: string
 
 jobs:
-  sync_and_document:
+  document_iflows:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
 
     steps:
-    # -----------------------------------------------------
-    # CHECKOUT REPO
-    # -----------------------------------------------------
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # -----------------------------------------------------
-    # API DEPENDENCIES
-    # -----------------------------------------------------
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y jq curl
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
 
-    # -----------------------------------------------------
-    # FETCH PACKAGE LIST FROM CPI
-    # -----------------------------------------------------
-    - name: Fetch CPI Packages
-      id: normalize
-      env:
-        TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-        CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-      run: |
-        echo "🔑 Requesting OAuth Token..."
+      - name: Generate Documentation for Each iFlow (Copilot)
+        env:
+          PKG_ID: ${{ github.event.inputs.package_id }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          API_URL="https://models.inference.ai/github/v1/chat/completions"
+          MODEL="gpt-4o-mini"
 
-        TOKEN_URL="https://$OAUTH_HOST/oauth/token"
-        AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-          -H "Content-Type: application/x-www-form-urlencoded" \
-          -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
-
-        TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
-
-        if [ -z "$TOKEN" ] || [ "$TOKEN" == "null" ]; then
-          echo "::error:: FAILED to retrieve OAuth token."
-          exit 1
-        fi
-
-        API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
-        PACKAGE_RESPONSE=$(curl -s -X GET "$API_URL" \
-          -H "Authorization: Bearer $TOKEN")
-
-        PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" | jq -r ".d.results[].Id" | tr '\n' ' ')
-
-        if [ -z "$PACKAGE_IDS" ]; then
-          echo "::error:: No packages detected!"
-          exit 1
-        fi
-
-        echo "✅ Packages: $PACKAGE_IDS"
-        echo "packages=$PACKAGE_IDS" >> $GITHUB_OUTPUT
-
-    # -----------------------------------------------------
-    # RUN FLASHPIPE SYNC FOR ALL PACKAGES
-    # -----------------------------------------------------
-    - name: Sync Packages (FlashPipe)
-      env:
-        TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-        CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-        CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-      run: |
-        docker run --rm \
-          --user $(id -u):$(id -g) \
-          -v "${GITHUB_WORKSPACE}:/workspace" \
-          -w /workspace \
-          -e TMN_HOST="$TMN_HOST" \
-          -e OAUTH_HOST="$OAUTH_HOST" \
-          -e CLIENT_ID="$CLIENT_ID" \
-          -e CLIENT_SECRET="$CLIENT_SECRET" \
-          engswee/flashpipe:latest \
-          sh -c '
-            for PKG in ${{ steps.normalize.outputs.packages }}; do
-              echo "➡ Syncing $PKG..."
-              flashpipe sync \
-                --tmn-host "$TMN_HOST" \
-                --oauth-host "$OAUTH_HOST" \
-                --oauth-clientid "$CLIENT_ID" \
-                --oauth-clientsecret "$CLIENT_SECRET" \
-                --package-id "$PKG" \
-                --dir-artifacts "cpi-artifacts/$PKG" \
-                --sync-package-details
-            done
-          '
-
-    # -----------------------------------------------------
-    # GENERATE AI DOCUMENTATION FOR EACH IFLOW
-    # -----------------------------------------------------
-    - name: Generate AI Documentation
-      env:
-        DOC_IFLOW_URL: ${{ secrets.DOC_IFLOW_URL }}
-        DOC_IFLOW_USER: ${{ secrets.DOC_IFLOW_USER }}
-        DOC_IFLOW_PASS: ${{ secrets.DOC_IFLOW_PASS }}
-      run: |
-        echo "📝 Start AI documentation generation..."
-
-        if [ -z "$DOC_IFLOW_URL" ]; then
-          echo "::error:: Missing DOC_IFLOW_URL secret."
-          exit 1
-        fi
-
-        for PKG in ${{ steps.normalize.outputs.packages }}; do
-          PKG_DIR="cpi-artifacts/$PKG"
+          PKG_DIR="cpi-artifacts/$PKG_ID"
 
           if [ ! -d "$PKG_DIR" ]; then
-            echo "⚠ Package folder missing: $PKG"
-            continue
+            echo "::error:: Package folder not found: $PKG_ID"
+            exit 1
           fi
 
-          echo "📦 Processing package: $PKG"
+          echo "📦 Generating documentation for package: $PKG_ID"
 
-          # Safe folder loop
-          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d -print0 |
-          while IFS= read -r -d '' FLOW_PATH; do
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create documentation ONLY for the provided iFlow artifacts. Use this structure:
+          1. High-level iFlow architecture
+          2. Purpose
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step processing
+          6. Mapping/XSLT logic
+          7. Groovy script purpose
+          8. Error handling
+          9. Security/auth
+          10. Deployment notes"
 
-            FLOW=$(basename "$FLOW_PATH")
-            echo "➡ Documenting iFlow: $PKG / $FLOW"
+          # Loop through each folder inside the package
+          for FLOW_DIR in "$PKG_DIR"/*; do
+            [[ -d "$FLOW_DIR" ]] || continue
+            FLOW_NAME=$(basename "$FLOW_DIR")
+            OUTPUT_FILE="$FLOW_DIR/IFlow_Summary.md"
 
-            PAYLOAD="{\"packageId\":\"$PKG\",\"artifactId\":\"$FLOW\"}"
+            echo "📝 Generating documentation for iFlow: $FLOW_NAME"
 
-            HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
-              -u "$DOC_IFLOW_USER:$DOC_IFLOW_PASS" \
-              -H "Content-Type: application/json" \
-              -X POST "$DOC_IFLOW_URL" \
-              -d "$PAYLOAD")
+            FILES=$(find "$FLOW_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.groovy" -o -name "*.xslt" \))
 
-            RESPONSE_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
-            STATUS_CODE=$(echo "$HTTP_RESPONSE" | tail -n1)
-
-            echo "📩 Status: $STATUS_CODE"
-
-            if [ "$STATUS_CODE" != "200" ]; then
-              echo "::error:: Documentation generation FAILED for $FLOW"
-              echo "$RESPONSE_BODY"
+            if [ -z "$FILES" ]; then
+              echo "⚠ No artifacts found in $FLOW_NAME"
               continue
             fi
 
-            DOC_PATH="$FLOW_PATH/Documentation.md"
-            echo "$RESPONSE_BODY" > "$DOC_PATH"
+            FULL_CONTENT=""
+            for FILE in $FILES; do
+              CONTENT=$(cat "$FILE")
+              FULL_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
+            done
 
-            echo "✔ Documentation saved → $DOC_PATH"
+            USER_QUERY="Generate documentation for this CPI iFlow only.\n\`\`\`\n$FULL_CONTENT\n\`\`\`"
 
+            # Build API payload
+            PAYLOAD=$(jq -n \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_QUERY" \
+              --arg model "$MODEL" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: $sys},
+                  {role: "user", content: $usr}
+                ]
+              }'
+            )
+
+            # Call GitHub Copilot API
+            RESPONSE=$(curl -s -X POST "$API_URL" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer '"$GITHUB_TOKEN"'" \
+              -d "$PAYLOAD")
+
+            OUTPUT=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
+
+            if [[ "$OUTPUT" == "null" ]]; then
+              echo "❌ Failed to generate summary for $FLOW_NAME"
+              continue
+            fi
+
+            echo "$OUTPUT" > "$OUTPUT_FILE"
+
+            echo "✅ Created: $OUTPUT_FILE"
           done
-        done
 
-    # -----------------------------------------------------
-    # COMMIT DOCUMENTATION + PACKAGE SYNC
-    # -----------------------------------------------------
-    - name: Commit & Push Changes
-      run: |
-        git config user.name "github-actions"
-        git config user.email "actions@github.com"
-        git add .
-        git commit -m "CPI sync + AI documentation update" || echo "No changes"
-        git push || true
+      - name: Commit Documentation
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git add cpi-artifacts/*/*/IFlow_Summary.md
+
+          if git commit -m "🤖 Copilot: Generated iFlow documentation"; then
+            git push
+            echo "🚀 Documentation pushed to repository."
+          else
+            echo "ℹ No changes to commit."
+          fi
