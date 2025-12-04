@@ -82,8 +82,7 @@ jobs:
             done
 
             USER_QUERY="Generate documentation for this CPI iFlow using the provided content below.
-
-$FULL_CONTENT"
+            $FULL_CONTENT"
 
             # Build request payload
             PAYLOAD=$(jq -n \
