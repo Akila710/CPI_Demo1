@@ -1,130 +1,148 @@
-name: Sync CPI → Git (with AI Docs)
+name: Sync CPI → GitHub + Auto Documentation
 
 on:
   workflow_dispatch:
 
 jobs:
-  sync:
+  sync_and_document:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+      id-token: write
+      actions: read
+      copilot: write   # REQUIRED FOR COPILOT AI
+
     steps:
+      # ---------------------------------------------------
+      # CHECKOUT REPO
+      # ---------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Tools
+      # ---------------------------------------------------
+      # INSTALL DEPENDENCIES
+      # ---------------------------------------------------
+      - name: Install jq, curl, unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl unzip
 
-      # ------------------------------
-      # 1. GET OAUTH TOKEN
-      # ------------------------------
-      - name: Get OAuth Token
-        id: token
+      - name: Install Copilot CLI
+        run: |
+          npm install -g @github/copilot-cli
+          copilot-cli --version
+
+      # ---------------------------------------------------
+      # FETCH PACKAGE LIST FROM CPI
+      # ---------------------------------------------------
+      - name: Fetch CPI Package List
+        id: package_list
         env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
           OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
           CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
         run: |
+          # Generate OAuth token
           TOKEN_URL="https://$OAUTH_HOST/oauth/token"
-          RES=$(curl -s -X POST "$TOKEN_URL" \
-             -H "Content-Type: application/x-www-form-urlencoded" \
-             -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
-          TOKEN=$(echo "$RES" | jq -r ".access_token")
-          echo "token=$TOKEN" >> $GITHUB_OUTPUT
+          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
 
-      # ------------------------------
-      # 2. FETCH ALL PACKAGES
-      # ------------------------------
-      - name: Get CPI Packages
-        id: packages
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          TOKEN: ${{ steps.token.outputs.token }}
-        run: |
+          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
+
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Token generation failed"
+            exit 1
+          fi
+
+          # Fetch all packages
           URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
           RES=$(curl -s -H "Authorization: Bearer $TOKEN" "$URL")
-          PKGS=$(echo "$RES" | jq -r ".d.results[].Id")
+
+          PKGS=$(echo "$RES" | jq -r ".d.results[].Id" | tr '\n' ' ')
+          echo "Packages found: $PKGS"
+
           echo "packages=$PKGS" >> $GITHUB_OUTPUT
 
-      # ------------------------------
-      # 3. DOWNLOAD ALL iFLOWS + VERSIONS
-      # ------------------------------
-      - name: Download all iFlows & Versions
+          echo "$TOKEN" > token.txt
+
+      # ---------------------------------------------------
+      # FETCH ALL IFLOWS + UNZIP + STORE IN GIT
+      # ---------------------------------------------------
+      - name: Download iFlows from CPI
         env:
           TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          TOKEN: ${{ steps.token.outputs.token }}
-          PACKAGES: ${{ steps.packages.outputs.packages }}
         run: |
-          for PKG in $PACKAGES; do
-            echo "📦 Package: $PKG"
-            mkdir -p "cpi-artifacts/$PKG"
+          TOKEN=$(cat token.txt)
 
-            # Get iFlows inside package
-            LIST_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
-            FLOWS=$(curl -s -H "Authorization: Bearer $TOKEN" "$LIST_URL" | jq -r ".d.results[].Id")
+          for PKG in ${{ steps.package_list.outputs.packages }}; do
+            echo "📦 Processing package: $PKG"
+            mkdir -p cpi-artifacts/$PKG
 
-            for FLOW in $FLOWS; do
-              echo "➡ iFlow: $FLOW"
-              mkdir -p "cpi-artifacts/$PKG/$FLOW/versions"
+            ART_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
+            ART=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
 
-              # Get ALL versions
-              VER_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/ArtifactVersions?\$format=json"
-              VERS=$(curl -s -H "Authorization: Bearer $TOKEN" "$VER_URL" | jq -r ".d.results[].Version")
+            for FLOW in $(echo "$ART" | jq -r ".d.results[].Id"); do
+              echo "➡ Downloading iFlow: $FLOW"
 
-              for VER in $VERS; do
-                echo "⬇ Download Version: $VER"
-                ZIPFILE="$FLOW-$VER.zip"
+              ZIPFILE="$FLOW.zip"
+              curl -s \
+                -H "Authorization: Bearer $TOKEN" \
+                "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
+                -o "$ZIPFILE"
 
-                curl -s -H "Authorization: Bearer $TOKEN" \
-                  "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts(Id='$FLOW',Version='$VER')/Content" \
-                  -o "$ZIPFILE"
-
-                mkdir -p "cpi-artifacts/$PKG/$FLOW/versions/$VER"
-                unzip -o "$ZIPFILE" -d "cpi-artifacts/$PKG/$FLOW/versions/$VER" > /dev/null
-                rm "$ZIPFILE"
-              done
+              mkdir -p "cpi-artifacts/$PKG/$FLOW"
+              unzip -o "$ZIPFILE" -d "cpi-artifacts/$PKG/$FLOW" > /dev/null
+              rm "$ZIPFILE"
             done
           done
 
-      # ------------------------------
-      # 4. GENERATE DOCUMENTATION FOR EACH FLOW
-      # ------------------------------
-      - name: Generate AI Documentation
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      # ---------------------------------------------------
+      # AI DOCUMENTATION FOR EACH IFLOW
+      # ---------------------------------------------------
+      - name: Generate AI documentation for each iFlow
         run: |
-          for PKG in $(ls cpi-artifacts); do
-            for FLOW in $(ls cpi-artifacts/$PKG); do
-              SUMMARY_FILE="cpi-artifacts/$PKG/$FLOW/summary.md"
+          BASE="cpi-artifacts"
 
-              echo "📝 Generating documentation for $FLOW"
+          for PKG in $(ls $BASE); do
+            echo "📦 Documenting package: $PKG"
 
-              CONTENT=$(find "cpi-artifacts/$PKG/$FLOW/versions" -type f -name "*.iflw" -exec cat {} \; | head -c 8000)
+            for IFLOW in $(ls $BASE/$PKG); do
+              IFLOW_DIR="$BASE/$PKG/$IFLOW"
 
-              DOC=$(curl -s https://api.openai.com/v1/chat/completions \
-                -H "Authorization: Bearer $OPENAI_API_KEY" \
-                -H "Content-Type: application/json" \
-                -d "{
-                  \"model\": \"gpt-4o-mini\",
-                  \"messages\": [
-                    {\"role\": \"system\", \"content\": \"You are an expert SAP CPI documentation generator.\"},
-                    {\"role\": \"user\", \"content\": \"Generate a clear summary for this iFlow:\n$CONTENT\"}
-                  ]
-                }" | jq -r ".choices[0].message.content")
+              if [ ! -d "$IFLOW_DIR" ]; then
+                continue
+              fi
 
-              echo "$DOC" > "$SUMMARY_FILE"
-              echo "✔ Documentation created: $SUMMARY_FILE"
+              echo "📝 Generating documentation for $IFLOW"
+
+              SUMMARY=$(copilot-cli explain "$IFLOW_DIR" \
+                --title "Generate documentation for CPI iFlow: $IFLOW" \
+                --prompt "
+You are documenting an SAP CPI iFlow.
+Summarize this iFlow with:
+- Purpose
+- Sender and receiver adapters
+- Step-by-step integration logic
+- Mappings and scripts used
+- Exception handling
+- Trigger and endpoints
+Write a clean and readable Markdown file.
+")
+
+              echo "$SUMMARY" > "$IFLOW_DIR/DOCUMENTATION.md"
             done
           done
 
-      # ------------------------------
-      # 5. Commit & Push
-      # ------------------------------
-      - name: Commit and Push
+      # ---------------------------------------------------
+      # COMMIT + PUSH ALL CHANGES
+      # ---------------------------------------------------
+      - name: Commit & push documentation + synced flows
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add .
-          git commit -m "Sync CPI → Git (with docs)" || echo "No changes"
+          git commit -m "Synced CPI flows + AI documentation" || echo "No changes"
           git push || true
