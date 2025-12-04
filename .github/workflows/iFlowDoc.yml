@@ -40,17 +40,7 @@ jobs:
 
           echo "📦 Processing package: $PKG_ID"
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create technical documentation based on CPI iFlow artifacts. Follow this structure:
-1. High-level architecture
-2. Purpose
-3. Sender/Receiver systems
-4. Adapter types used
-5. Step-by-step logic
-6. Mapping logic (XML/XSLT)
-7. Groovy script explanation
-8. Error handling
-9. Security/authentication
-10. Deployment notes"
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create technical documentation based on CPI iFlow artifacts. Follow this structure:\n1. High-level architecture\n2. Purpose\n3. Sender/Receiver systems\n4. Adapter types used\n5. Step-by-step logic\n6. Mapping logic (XML/XSLT)\n7. Groovy script explanation\n8. Error handling\n9. Security/authentication\n10. Deployment notes"
 
           for FLOW_DIR in "$PKG_DIR"/*; do
             [[ -d "$FLOW_DIR" ]] || continue
@@ -96,7 +86,7 @@ jobs:
             OUTPUT=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
 
             if [[ "$OUTPUT" == "null" || -z "$OUTPUT" ]]; then
-              echo "❌ Failed to generate documentation for $FLOW_NAME"
+              echo "❌ Failed to generate documentation for: $FLOW_NAME"
               continue
             fi
 
