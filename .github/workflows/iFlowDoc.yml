@@ -1,0 +1,143 @@
+name: Sync CPI Packages + Auto Documentation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      copilot: write   # REQUIRED for Copilot AI
+      id-token: write
+      actions: read
+
+    steps:
+      # ---------------------------------------------------
+      # CHECKOUT REPO
+      # ---------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------
+      # INSTALL TOOLS
+      # ---------------------------------------------------
+      - name: Install jq, curl, unzip, and Copilot CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl unzip
+          npm install -g @github/copilot-cli
+
+      # ---------------------------------------------------
+      # FETCH CPI PACKAGE LIST
+      # ---------------------------------------------------
+      - name: Fetch CPI packages
+        id: normalize
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+        run: |
+          echo "🔑 Generating OAuth Token..."
+          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
+
+          AUTH=$(curl -s -X POST "$TOKEN_URL" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
+
+          TOKEN=$(echo "$AUTH" | jq -r ".access_token")
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::Token generation failed!"
+            exit 1
+          fi
+
+          echo "$TOKEN" > token.txt
+
+          echo "🔍 Fetching CPI packages..."
+          URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
+          RES=$(curl -s -H "Authorization: Bearer $TOKEN" "$URL")
+          PKGS=$(echo "$RES" | jq -r ".d.results[].Id" | tr '\n' ' ')
+
+          echo "Found packages: $PKGS"
+          echo "packages=$PKGS" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------
+      # DOWNLOAD IFLOWS FROM CPI → GIT
+      # ---------------------------------------------------
+      - name: Download iFlows from CPI
+        env:
+          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+        run: |
+          TOKEN=$(cat token.txt)
+
+          for PKG in ${{ steps.normalize.outputs.packages }}; do
+            echo "📦 Processing package: $PKG"
+            mkdir -p cpi-artifacts/$PKG
+
+            API="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
+            ARTIFACTS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API")
+
+            for FLOW in $(echo "$ARTIFACTS" | jq -r ".d.results[].Id"); do
+              echo "➡ Downloading iFlow: $FLOW"
+              ZIP="$FLOW.zip"
+
+              curl -s \
+                -H "Authorization: Bearer $TOKEN" \
+                "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
+                -o "$ZIP"
+
+              mkdir -p "cpi-artifacts/$PKG/$FLOW"
+              unzip -o "$ZIP" -d "cpi-artifacts/$PKG/$FLOW" > /dev/null
+              rm "$ZIP"
+            done
+          done
+
+      # ---------------------------------------------------
+      # AI DOCUMENTATION GENERATION (COPILOT)
+      # ---------------------------------------------------
+      - name: Auto-generate documentation for every iFlow
+        run: |
+          BASE="cpi-artifacts"
+
+          for PKG in $(ls $BASE); do
+            for IFLOW in $(ls $BASE/$PKG); do
+              DIR="$BASE/$PKG/$IFLOW"
+
+              if [ ! -d "$DIR" ]; then
+                continue
+              fi
+
+              echo "📝 Generating documentation for $IFLOW"
+
+              DOC=$(copilot-cli explain "$DIR" \
+                --title "Documentation for SAP CPI iFlow: $IFLOW" \
+                --prompt "
+Create a Markdown document summarizing this SAP CPI iFlow.
+Include:
+1. Purpose of the iFlow
+2. Sender & Receiver adapters
+3. Step-by-step integration logic
+4. Message mappings used
+5. Groovy scripts used
+6. Exception handling
+7. Endpoints / triggers
+Write clean professional documentation.
+")
+
+              echo "$DOC" > "$DIR/DOCUMENTATION.md"
+            done
+          done
+
+      # ---------------------------------------------------
+      # COMMIT & PUSH
+      # ---------------------------------------------------
+      - name: Commit & push updates
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Synced CPI + Added AI documentation" || echo "No changes"
+          git push || true
