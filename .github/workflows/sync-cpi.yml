@@ -1,148 +1,101 @@
-name: Sync CPI → GitHub + Auto Documentation
-
+name: Sync All CPI Packages (Dynamic - FINAL ATTEMPT)
+ 
 on:
-  workflow_dispatch:
-
+workflow_dispatch:
+ 
 jobs:
-  sync_and_document:
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-      id-token: write
-      actions: read
-      copilot: write   # REQUIRED FOR COPILOT AI
-
-    steps:
-      # ---------------------------------------------------
-      # CHECKOUT REPO
-      # ---------------------------------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      # ---------------------------------------------------
-      # INSTALL DEPENDENCIES
-      # ---------------------------------------------------
-      - name: Install jq, curl, unzip
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl unzip
-
-      - name: Install Copilot CLI
-        run: |
-          npm install -g @github/copilot-cli
-          copilot-cli --version
-
-      # ---------------------------------------------------
-      # FETCH PACKAGE LIST FROM CPI
-      # ---------------------------------------------------
-      - name: Fetch CPI Package List
-        id: package_list
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-          OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
-          CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
-        run: |
-          # Generate OAuth token
-          TOKEN_URL="https://$OAUTH_HOST/oauth/token"
-          AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
-
-          TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
-
-          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
-            echo "::error::Token generation failed"
-            exit 1
-          fi
-
-          # Fetch all packages
-          URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
-          RES=$(curl -s -H "Authorization: Bearer $TOKEN" "$URL")
-
-          PKGS=$(echo "$RES" | jq -r ".d.results[].Id" | tr '\n' ' ')
-          echo "Packages found: $PKGS"
-
-          echo "packages=$PKGS" >> $GITHUB_OUTPUT
-
-          echo "$TOKEN" > token.txt
-
-      # ---------------------------------------------------
-      # FETCH ALL IFLOWS + UNZIP + STORE IN GIT
-      # ---------------------------------------------------
-      - name: Download iFlows from CPI
-        env:
-          TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
-        run: |
-          TOKEN=$(cat token.txt)
-
-          for PKG in ${{ steps.package_list.outputs.packages }}; do
-            echo "📦 Processing package: $PKG"
-            mkdir -p cpi-artifacts/$PKG
-
-            ART_URL="https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts?\$filter=PackageId eq '$PKG'&\$format=json"
-            ART=$(curl -s -H "Authorization: Bearer $TOKEN" "$ART_URL")
-
-            for FLOW in $(echo "$ART" | jq -r ".d.results[].Id"); do
-              echo "➡ Downloading iFlow: $FLOW"
-
-              ZIPFILE="$FLOW.zip"
-              curl -s \
-                -H "Authorization: Bearer $TOKEN" \
-                "https://$TMN_HOST/api/v1/IntegrationDesigntimeArtifacts('$FLOW')/Content" \
-                -o "$ZIPFILE"
-
-              mkdir -p "cpi-artifacts/$PKG/$FLOW"
-              unzip -o "$ZIPFILE" -d "cpi-artifacts/$PKG/$FLOW" > /dev/null
-              rm "$ZIPFILE"
-            done
-          done
-
-      # ---------------------------------------------------
-      # AI DOCUMENTATION FOR EACH IFLOW
-      # ---------------------------------------------------
-      - name: Generate AI documentation for each iFlow
-        run: |
-          BASE="cpi-artifacts"
-
-          for PKG in $(ls $BASE); do
-            echo "📦 Documenting package: $PKG"
-
-            for IFLOW in $(ls $BASE/$PKG); do
-              IFLOW_DIR="$BASE/$PKG/$IFLOW"
-
-              if [ ! -d "$IFLOW_DIR" ]; then
-                continue
-              fi
-
-              echo "📝 Generating documentation for $IFLOW"
-
-              SUMMARY=$(copilot-cli explain "$IFLOW_DIR" \
-                --title "Generate documentation for CPI iFlow: $IFLOW" \
-                --prompt "
-You are documenting an SAP CPI iFlow.
-Summarize this iFlow with:
-- Purpose
-- Sender and receiver adapters
-- Step-by-step integration logic
-- Mappings and scripts used
-- Exception handling
-- Trigger and endpoints
-Write a clean and readable Markdown file.
-")
-
-              echo "$SUMMARY" > "$IFLOW_DIR/DOCUMENTATION.md"
-            done
-          done
-
-      # ---------------------------------------------------
-      # COMMIT + PUSH ALL CHANGES
-      # ---------------------------------------------------
-      - name: Commit & push documentation + synced flows
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add .
-          git commit -m "Synced CPI flows + AI documentation" || echo "No changes"
-          git push || true
+sync:
+runs-on: ubuntu-latest
+ 
+steps:
+- name: Checkout repository
+uses: actions/checkout@v4
+ 
+- name: Install Dependencies for CPI API Calls
+run: |
+# Install jq (JSON processor) on the GitHub Runner
+sudo apt-get update
+sudo apt-get install -y jq curl
+ 
+- name: Dynamic Fetch and Normalize Package List
+id: normalize
+env:
+TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+run: |
+echo "🔑 Generating OAuth Token via cURL..."
+TOKEN_URL="https://$OAUTH_HOST/oauth/token"
+ 
+# 1. Fetch the OAuth Token using the Runner's curl/jq
+AUTH_RESPONSE=$(curl -s -X POST "$TOKEN_URL" \
+-H "Content-Type: application/x-www-form-urlencoded" \
+-d "grant_type=client_credentials&client_id=$CLIENT_ID&client_secret=$CLIENT_SECRET")
+ 
+# Use jq for reliable JSON parsing
+TOKEN=$(echo "$AUTH_RESPONSE" | jq -r ".access_token")
+ 
+if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+echo "::error::Failed to retrieve access token."
+echo "Raw Auth Response: $AUTH_RESPONSE"
+exit 1
+fi
+ 
+# 2. Fetch the Package List
+echo "🔍 Fetching package list from tenant..."
+API_URL="https://$TMN_HOST/api/v1/IntegrationPackages?\$format=json"
+ 
+PACKAGE_RESPONSE=$(curl -s -X GET "$API_URL" \
+-H "Authorization: Bearer $TOKEN")
+ 
+# Use jq to get all 'Id' values and join them with spaces
+PACKAGE_IDS=$(echo "$PACKAGE_RESPONSE" | jq -r ".d.results[].Id" | tr '\n' ' ')
+ 
+if [ -z "$PACKAGE_IDS" ]; then
+echo "::warning::No packages found or API call failed. Check permissions."
+exit 0
+fi
+ 
+echo "✅ Found packages: $PACKAGE_IDS"
+# Set the output variable for the next step to use
+echo "packages=$PACKAGE_IDS" >> $GITHUB_OUTPUT
+ 
+- name: Run FlashPipe inside Docker (Sync Packages)
+env:
+TMN_HOST: ${{ secrets.DEV_TMN_HOST }}
+OAUTH_HOST: ${{ secrets.DEV_OAUTH_HOST }}
+CLIENT_ID: ${{ secrets.DEV_CLIENT_ID }}
+CLIENT_SECRET: ${{ secrets.DEV_CLIENT_SECRET }}
+run: |
+docker run --rm \
+--user $(id -u):$(id -g) \
+-v "${GITHUB_WORKSPACE}:/workspace" \
+-w /workspace \
+-e TMN_HOST="$TMN_HOST" \
+-e OAUTH_HOST="$OAUTH_HOST" \
+-e CLIENT_ID="$CLIENT_ID" \
+-e CLIENT_SECRET="$CLIENT_SECRET" \
+engswee/flashpipe:latest \
+sh -c '
+# Loop over the dynamically retrieved list
+for PKG in ${{ steps.normalize.outputs.packages }}; do
+echo "➡ Syncing $PKG..."
+flashpipe sync \
+--tmn-host "$TMN_HOST" \
+--oauth-host "$OAUTH_HOST" \
+--oauth-clientid "$CLIENT_ID" \
+--oauth-clientsecret "$CLIENT_SECRET" \
+--package-id "$PKG" \
+--dir-artifacts "cpi-artifacts/$PKG" \
+--sync-package-details
+done
+'
+ 
+- name: Commit & push
+run: |
+git config user.name "github-actions"
+git config user.email "actions@github.com"
+git add .
+git commit -m "Automated CPI package sync (dynamic list via API)" || echo "No changes"
+git push || true
