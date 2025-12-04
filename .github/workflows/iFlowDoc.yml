@@ -74,16 +74,16 @@ jobs:
               continue
             fi
 
-            FULL_CONTENT=""
+            FULL_CONTENT="Artifacts for iFlow: $FLOW_NAME\n"
+
             for FILE in $FILES; do
               CONTENT=$(cat "$FILE")
-              FULL_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
+              FULL_CONTENT="$FULL_CONTENT\n--- START FILE: $FILE ---\n$CONTENT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_QUERY="Generate documentation for this CPI iFlow based on its artifacts:
-\`\`\`
-$FULL_CONTENT
-\`\`\`"
+            USER_QUERY="Generate documentation for this CPI iFlow using the provided content below.
+
+$FULL_CONTENT"
 
             # Build request payload
             PAYLOAD=$(jq -n \
@@ -127,7 +127,6 @@ $FULL_CONTENT
             exit 0
           fi
 
-          # Safely add without error
           git add cpi-artifacts/*/*/IFlow_Summary.md 2>/dev/null || true
 
           if git commit -m "🤖 Copilot: Generated iFlow documentation"; then
