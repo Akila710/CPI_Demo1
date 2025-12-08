@@ -1,134 +1,68 @@
-name: 🤖 Generate iFlow-wise Documentation (Groq API)
+name: 🤖 Generate Single Consolidated Documentation for Package
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI Package folder under cpi-artifacts"
+        description: "The ID of the CPI Integration Package (e.g., 'PDFcoveter')."
         required: true
         type: string
 
 jobs:
-  generate:
+  document:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install jq
+      - name: Install Dependencies (jq only)
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Generate documentation per iFlow using Groq
-        id: doc
+      - name: Generate Consolidated Documentation via OpenAI API
+        id: documentation_step
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          set -e
-
-          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL="llama-3.3-70b-versatile"
+          # --- Configuration ---
+          API_URL="https://api.openai.com/v1/chat/completions"
+          MODEL_NAME="gpt-4o-mini"
 
           PKG_DIR="cpi-artifacts/$PKG_ID"
+          OUTPUT_FILE="$PKG_DIR/Package_Summary.md"
 
           if [ ! -d "$PKG_DIR" ]; then
-            echo "::error::Package not found: $PKG_DIR"
+            echo "::error::Package directory not found at: $PKG_DIR"
+            echo "::error::Please check if Package ID ('$PKG_ID') is correct."
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "📦 Processing Package: $PKG_ID"
+          echo "🔍 Consolidating ALL CPI artifacts into a single request for Package: $PKG_ID"
 
-          # Loop each iFlow folder inside package
-          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d | while read IFLOW_DIR; do
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze ALL provided code and configuration files from a single CPI package and synthesize them into ONE consolidated Markdown documentation report. You MUST adhere strictly to the following 10-point structure. Consolidate Groovy, XSLT, and iFlow logic into the relevant sections (5, 6, and 7).
 
-            IFLOW_NAME=$(basename "$IFLOW_DIR")
-            OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
+          The 10 mandatory sections, using Markdown headings, are:
+          1. High-level architecture
+          2. Purpose of each iFlow
+          3. Sender/Receiver systems (Consolidated)
+          4. Adapter types used (Consolidated)
+          5. Step-by-step flow explanation (For each iFlow)
+          6. Mapping logic summary (Summarize XSLT, Mappings)
+          7. Groovy script explanations (Summarize all scripts and their usage/purpose)
+          8. Error handling
+          9. Security/authentication
+          10. Deployment notes
+          "
 
-            echo "➡️ Creating summary for iFlow: $IFLOW_NAME"
+          # --- Data Consolidation ---
+          FULL_ARTIFACT_CONTENT=""
 
-            # Gather files
-            FILES=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
-              -o -name "*.xslt" -o -name "*.xsl" -o -name "*.iflw" \))
+          FILES_TO_ANALYZE=$(find "$PKG_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' \) -print)
 
-            if [ -z "$FILES" ]; then
-              echo "⚠️ No supported files found in $IFLOW_NAME, skipping."
-              continue
-            fi
-
-            CONTENT=""
-            for FILE in $FILES; do
-              FILE_TEXT=$(cat "$FILE" 2>/dev/null || echo "[binary/unreadable]")
-              CONTENT+="\n--- START FILE: $FILE ---\n$FILE_TEXT\n--- END FILE: $FILE ---\n"
-            done
-
-            # Small prompt to avoid huge payloads
-            USER_PROMPT="
-            Analyze this CPI iFlow and generate clean technical documentation.
-
-            REQUIRED SECTIONS:
-            1. Purpose
-            2. Sender/Receiver systems
-            3. Adapters
-            4. Step-by-step flow explanation
-            5. Mapping logic (if any)
-            6. Groovy script logic
-            7. Error handling
-            8. Security
-            9. Notes
-
-            \`\`\`text
-            $CONTENT
-            \`\`\`
-            "
-
-            PAYLOAD=$(jq -n \
-              --arg model "$MODEL" \
-              --arg sys "You are a senior SAP CPI Integration Architect." \
-              --arg usr "$USER_PROMPT" \
-              '{
-                model: $model,
-                messages: [
-                  {"role":"system","content": $sys},
-                  {"role":"user","content": $usr}
-                ],
-                temperature: 0.1
-              }')
-
-            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD")
-
-            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-            if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-              echo "❌ Summary failed for iFlow: $IFLOW_NAME"
-              echo "Response: $RESPONSE"
-              continue
-            fi
-
-            echo "$SUMMARY" > "$OUTPUT_FILE"
-            echo "📝 Summary written to: $OUTPUT_FILE"
-
-          done
-
-      - name: Commit generated summaries
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          git add cpi-artifacts/**/iFlow_Summary.md || true
-
-          if git diff --cached --quiet; then
-            echo "ℹ No new summaries to commit."
-            exit 0
-          fi
-
-          git commit -m "🤖 Auto-generated iFlow summaries using Groq"
-          git push
-
-          echo "🚀 Documentation committed."
+          if [ -z "$FILES_TO_ANALYZE" ]; then
+            echo "::warning::No supported artifacts found in package '$PKG_ID'. Skipping documentation."
+            echo "docs_ge_
