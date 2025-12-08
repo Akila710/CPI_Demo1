@@ -1,4 +1,4 @@
-name: 🤖 Generate iFlow-wise Documentation (OpenAI LLaMA)
+name: 🤖 Generate iFlow-wise Documentation (OpenAI)
 
 on:
   workflow_dispatch:
@@ -21,16 +21,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq unzip
 
-      - name: Generate documentation per iFlow using OpenAI LLaMA
+      - name: Generate documentation per iFlow
         env:
-          LLAMA_API_KEY: ${{ secrets.LLAMA_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
           set -e
 
-          LLAMA_URL="https://api.openai.com/v1/chat/completions"
-          MODEL="meta-llama/llama-3.3-70b-versatile"
-
+          API_URL="https://api.openai.com/v1/chat/completions"
+          MODEL="gpt-4o-mini"
           PKG_DIR="cpi-artifacts/$PKG_ID"
 
           if [ ! -d "$PKG_DIR" ]; then
@@ -40,7 +39,7 @@ jobs:
 
           echo "📦 Processing Package: $PKG_ID"
 
-          # Loop through each iFlow folder
+          # Loop each subfolder (each iFlow folder)
           find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d | while read IFLOW_DIR; do
 
             IFLOW_NAME=$(basename "$IFLOW_DIR")
@@ -48,20 +47,20 @@ jobs:
 
             echo "➡️ Generating summary for iFlow: $IFLOW_NAME"
 
-            # STEP 1 — Collect readable text files
+            # STEP 1 — Collect readable artifacts
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
                  -name "*.xslt" -o -name "*.xsl" \))
 
-            # STEP 2 — Handle .iflw files (zip or xml)
+            # STEP 2 — Detect .iflw (ZIP)
             IFLW_FILES=$(find "$IFLOW_DIR" -type f -name "*.iflw")
 
             for IFLW in $IFLW_FILES; do
-              echo "📦 Checking IFLW: $IFLW"
+              echo "📦 Checking IFLW: $IFLOW_NAME → $IFLW"
 
               if unzip -t "$IFLW" >/dev/null 2>&1; then
                 echo "📂 IFLW is ZIP — extracting..."
-                EXTRACT_DIR="$IFLOW_DIR/_extracted_$(basename "$IFLW")"
+                EXTRACT_DIR="$IFLOW_DIR/_extract_$(basename "$IFLW")"
                 mkdir -p "$EXTRACT_DIR"
                 unzip -q "$IFLW" -d "$EXTRACT_DIR"
 
@@ -70,6 +69,7 @@ jobs:
                      -name "*.xslt" -o -name "*.xsl" \))
 
                 FILES="$FILES $EXTRA_FILES"
+
               else
                 echo "📄 IFLW is plain XML — adding directly"
                 FILES="$FILES $IFLW"
@@ -77,32 +77,33 @@ jobs:
             done
 
             if [ -z "$FILES" ]; then
-              echo "⚠ No readable artifacts inside iFlow: $IFLOW_NAME"
+              echo "⚠ No readable artifacts found for iFlow: $IFLOW_NAME"
               continue
             fi
 
-            # STEP 3 — Build content for AI
+            # STEP 3 — Collect file contents
             CONTENT=""
             for FILE in $FILES; do
               echo "📄 Reading: $FILE"
-              TEXT=$(cat "$FILE" 2>/dev/null || echo "[unreadable file]")
+              TEXT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            # STEP 4 — Build USER PROMPT
+            # STEP 4 — Build prompt
             USER_PROMPT="
-            Analyze this SAP CPI iFlow and produce high-quality technical documentation.
+            Generate detailed SAP CPI iFlow documentation.
 
-            REQUIRED SECTIONS:
+            Sections required:
             1. Purpose
             2. Sender/Receiver systems
             3. Adapter types used
-            4. Step-by-step flow explanation
-            5. Mapping logic (if any)
-            6. Groovy script logic summary
-            7. Error handling
-            8. Security considerations
+            4. Step-by-step flow logic
+            5. Mapping logic (XSLT/JSON/XML)
+            6. Groovy script logic explanation
+            7. Error handling mechanisms
+            8. Security aspects
             9. Additional notes
+            Analyze the following CPI iFlow artifacts:
 
             \`\`\`text
             $CONTENT
@@ -117,33 +118,32 @@ jobs:
               '{
                 model: $model,
                 messages: [
-                  { "role": "system", "content": $sys },
-                  { "role": "user", "content": $usr }
+                  {"role": "system", "content": $sys},
+                  {"role": "user", "content": $usr}
                 ],
                 temperature: 0.1
               }')
 
             # STEP 6 — Call OpenAI API
-            RESPONSE=$(curl -s -X POST "$LLAMA_URL" \
-              -H "Authorization: Bearer '"$LLAMA_API_KEY"'" \
+            RESPONSE=$(curl -s -X POST "$API_URL" \
+              -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-              echo "❌ Summary generation failed for iFlow: $IFLOW_NAME"
-              echo "Response:"
-              echo "$RESPONSE"
+              echo "❌ Summary generation FAILED for: $IFLOW_NAME"
+              echo "Response: $RESPONSE"
               continue
             fi
 
             echo "$SUMMARY" > "$OUTPUT_FILE"
-            echo "📝 Summary saved: $OUTPUT_FILE"
+            echo "📝 iFlow summary written to: $OUTPUT_FILE"
 
           done
 
-      - name: Commit generated summaries
+      - name: Commit iFlow summaries
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -151,11 +151,11 @@ jobs:
           git add cpi-artifacts/**/iFlow_Summary.md || true
 
           if git diff --cached --quiet; then
-            echo "ℹ No new summaries generated."
+            echo "ℹ No updates to commit."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated iFlow documentation using LLaMA"
+          git commit -m "🤖 Auto-generated iFlow documentation using OpenAI GPT-4o"
           git push
 
           echo "🚀 Documentation committed successfully."
