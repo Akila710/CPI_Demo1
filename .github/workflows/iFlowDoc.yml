@@ -43,23 +43,21 @@ jobs:
           echo "🔍 Consolidating ALL CPI artifacts into a single request for Package: $PKG_ID"
 
           # --- System Prompt (YAML-safe) ---
-          SYSTEM_PROMPT="
-You are a senior SAP CPI Technical Architect.
-Your task is to analyze ALL provided code and configuration files from a single CPI package and synthesize them into ONE consolidated Markdown documentation report.
+          SYSTEM_PROMPT=" You are a senior SAP CPI Technical Architect.
+           Your task is to analyze ALL provided code and configuration files from a single CPI package and synthesize them into ONE consolidated Markdown documentation report.
 
-Follow this 10-section structure:
+           Follow this 10-section structure:
 
-1. High-level architecture  
-2. Purpose of each iFlow  
-3. Sender/Receiver systems (Consolidated)  
-4. Adapter types used (Consolidated)  
-5. Step-by-step flow explanation (For each iFlow)  
-6. Mapping logic summary  
-7. Groovy script explanations  
-8. Error handling  
-9. Security/authentication  
-10. Deployment notes  
-"
+           1. High-level architecture  
+           2. Purpose of each iFlow  
+           3. Sender/Receiver systems (Consolidated)  
+           4. Adapter types used (Consolidated)  
+           5. Step-by-step flow explanation (For each iFlow)  
+           6. Mapping logic summary  
+           7. Groovy script explanations  
+           8. Error handling  
+           9. Security/authentication  
+           10. Deployment notes"
 
           # --- Data Consolidation ---
           FULL_ARTIFACT_CONTENT=""
