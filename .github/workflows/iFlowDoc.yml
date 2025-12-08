@@ -1,45 +1,134 @@
-name: 🔐 Test Groq API Key
+name: 🤖 Generate Consolidated Package Summary (Groq API)
 
 on:
-  workflow_dispatch:  # Run manually
+  workflow_dispatch:
+    inputs:
+      package_id:
+        description: "Enter CPI Package ID (folder under cpi-artifacts)"
+        required: true
+        type: string
 
 jobs:
-  test-key:
+  document:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test Groq API Key
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Generate Summary (Groq)
+        id: generate_summary
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          echo "🔍 Checking if Groq API Key is present..."
+          set -e
 
-          # Check if key is empty
-          if [ -z "$GROQ_API_KEY" ]; then
-            echo "❌ ERROR: GROQ_API_KEY secret is NOT SET or EMPTY."
+          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
+          MODEL="llama-3.3-70b-versatile"
+
+          PKG_DIR="cpi-artifacts/$PKG_ID"
+          OUTPUT_FILE="$PKG_DIR/Package_Summary.md"
+
+          if [ ! -d "$PKG_DIR" ]; then
+            echo "::error::Package not found"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "✔ Key exists (value masked). Testing validity against Groq API..."
+          echo "📦 Collecting artifacts from: $PKG_ID"
 
-          # Make test request
-          RESPONSE=$(curl -s -X GET "https://api.groq.com/openai/v1/models" \
-            -H "Authorization: Bearer $GROQ_API_KEY")
+          SYSTEM_PROMPT="
+          You are a senior SAP CPI Technical Architect.
+          Generate a single consolidated Markdown documentation for the package.
+          Follow EXACTLY this structure:
 
-          echo "🔎 API Response:"
-          echo "$RESPONSE"
+             1. High-level architecture  
+             2. Purpose of each iFlow  
+             3. Sender/Receiver systems  
+             4. Adapter types used  
+             5. Flow logic (per iFlow)  
+             6. Mapping logic  
+             7. Groovy scripts explanation  
+             8. Error handling  
+             9. Security  
+             10. Deployment notes
+             "
 
-          # Check for invalid key
-          if echo "$RESPONSE" | grep -q "invalid_api_key"; then
-            echo "❌ INVALID KEY: Your Groq API key is NOT VALID."
-            exit 1
-          fi
+          FULL_ARTIFACT_CONTENT=""
 
-          # Check for valid response
-          if echo "$RESPONSE" | grep -q "data"; then
-            echo "🎉 SUCCESS: Your Groq API key is VALID!"
+          FILES=$(find "$PKG_DIR" -type f \
+            \( -name "*.xml" -o -name "*.json" -o -name "*.xslt" \
+            -o -name "*.xsl" -o -name "*.groovy" -o -name "*.iflw" \))
+
+          if [ -z "$FILES" ]; then
+            echo "⚠ No artifacts found"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "⚠ Unexpected response from Groq API. Key might be invalid or API unavailable."
-          exit 1
+          for FILE in $FILES; do
+            CONTENT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
+            FULL_ARTIFACT_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
+          done
+
+          USER_PROMPT="
+          Analyze all CPI artifacts and generate the summary.
+          \`\`\`
+          $FULL_ARTIFACT_CONTENT
+          \`\`\`
+          "
+
+          PAYLOAD=$(jq -n \
+            --arg sys "$SYSTEM_PROMPT" \
+            --arg usr "$USER_PROMPT" \
+            --arg model "$MODEL" \
+            '{
+              model: $model,
+              messages: [
+                {"role":"system", "content": $sys},
+                {"role":"user", "content": $usr}
+              ]
+            }')
+
+          RESPONSE=$(curl -s -X POST "$GROQ_URL" \
+            -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+
+          if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
+            echo "❌ Groq API failed"
+            echo "$RESPONSE"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "$SUMMARY" > "$OUTPUT_FILE"
+          echo "docs_generated=true" >> $GITHUB_OUTPUT
+
+      - name: Commit summary
+        if: steps.generate_summary.outputs.docs_generated == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          PKG_ID="${{ github.event.inputs.package_id }}"
+          OUTPUT_FILE="cpi-artifacts/$PKG_ID/Package_Summary.md"
+
+          git add "$OUTPUT_FILE" || true
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+
+          git commit -m "🤖 Auto-generated Package Summary for $PKG_ID (Groq API)"
+          git push
+          echo "Committed!"
