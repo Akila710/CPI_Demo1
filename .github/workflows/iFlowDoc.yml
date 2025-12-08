@@ -83,13 +83,10 @@ jobs:
 
           echo "📄 Total collected text size: ${#FULL_ARTIFACT_CONTENT} characters"
 
-          USER_PROMPT="
-Analyze all provided CPI artifacts and generate the package summary as instructed.
-
-\`\`\`text
-$FULL_ARTIFACT_CONTENT
-\`\`\`
-"
+          USER_PROMPT=" Analyze all provided CPI artifacts and generate the package summary as instructed.
+          \`\`\`text
+          $FULL_ARTIFACT_CONTENT
+          \`\`\` "
 
           # -------------------------------------------
           # BUILD REQUEST PAYLOAD
