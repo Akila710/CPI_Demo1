@@ -1,152 +1,45 @@
-name: 🤖 Generate Consolidated Package Summary (Groq API)
+name: 🔐 Test Groq API Key
 
 on:
-  workflow_dispatch:
-    inputs:
-      package_id:
-        description: "The ID of the CPI Integration Package (folder under cpi-artifacts)"
-        required: true
-        type: string
+  workflow_dispatch:  # Run manually
 
 jobs:
-  document:
+  test-key:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-      - name: Generate Package Summary via Groq API
-        id: generate_summary
+      - name: Test Groq API Key
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          set -e
+          echo "🔍 Checking if Groq API Key is present..."
 
-          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="llama-3.3-70b-versatile"
-
-          PKG_DIR="cpi-artifacts/$PKG_ID"
-          OUTPUT_FILE="$PKG_DIR/Package_Summary.md"
-
-          if [ ! -d "$PKG_DIR" ]; then
-            echo "::error:: Package not found: $PKG_DIR"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
+          # Check if key is empty
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "❌ ERROR: GROQ_API_KEY secret is NOT SET or EMPTY."
             exit 1
           fi
 
-          echo "📦 Collecting artifacts from package: $PKG_ID"
-          # -------------------------------------------
-          # SYSTEM PROMPT (Same structure as your Django pattern)
-          # -------------------------------------------
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Analyze ALL CPI artifacts inside a package and generate a single consolidated Markdown documentation.
-          Follow EXACTLY this structure:
+          echo "✔ Key exists (value masked). Testing validity against Groq API..."
 
-          1. High-level architecture  
-          2. Purpose of each iFlow  
-          3. Sender/Receiver systems (Consolidated)  
-          4. Adapter types used  
-          5. Step-by-step flow explanation (per iFlow)  
-          6. Mapping logic (XSLT, XML mappings)  
-          7. Groovy script logic summary  
-          8. Error handling  
-          9. Security/authentication  
-          10. Deployment notes  
+          # Make test request
+          RESPONSE=$(curl -s -X GET "https://api.groq.com/openai/v1/models" \
+            -H "Authorization: Bearer $GROQ_API_KEY")
 
-          Make the documentation extremely clear, structured, readable, and technically accurate."
+          echo "🔎 API Response:"
+          echo "$RESPONSE"
 
-          # -------------------------------------------
-          # COLLECT FILE CONTENT
-          # -------------------------------------------
-          FULL_ARTIFACT_CONTENT=""
+          # Check for invalid key
+          if echo "$RESPONSE" | grep -q "invalid_api_key"; then
+            echo "❌ INVALID KEY: Your Groq API key is NOT VALID."
+            exit 1
+          fi
 
-          # Detect all CPI file types
-          FILES=$(find "$PKG_DIR" -type f \
-            \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" -o -name "*.xsl" -o -name "*.xslt" -o -name "*.iflw" -o -name "*.zip" \))
-
-          if [ -z "$FILES" ]; then
-            echo "::warning::No supported artifacts found in package."
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
+          # Check for valid response
+          if echo "$RESPONSE" | grep -q "data"; then
+            echo "🎉 SUCCESS: Your Groq API key is VALID!"
             exit 0
           fi
 
-          for FILE in $FILES; do
-            CONTENT=$(cat "$FILE" 2>/dev/null || echo "[Binary/unreadable content]")
-            FULL_ARTIFACT_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
-          done
-
-          echo "📄 Total collected text size: ${#FULL_ARTIFACT_CONTENT} characters"
-
-          USER_PROMPT=" Analyze all provided CPI artifacts and generate the package summary as instructed.
-          \`\`\`text
-          $FULL_ARTIFACT_CONTENT
-          \`\`\` "
-
-          # -------------------------------------------
-          # BUILD REQUEST PAYLOAD
-          # -------------------------------------------
-          PAYLOAD=$(jq -n \
-            --arg sys "$SYSTEM_PROMPT" \
-            --arg usr "$USER_PROMPT" \
-            --arg model "$MODEL_NAME" \
-            '{
-              model: $model,
-              messages: [
-                { "role": "system", "content": $sys },
-                { "role": "user", "content": $usr }
-              ],
-              temperature: 0.1
-            }')
-
-          # -------------------------------------------
-          # CALL GROQ API
-          # -------------------------------------------
-          RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-            -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-          if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-            echo "❌ Groq API failed:"
-            echo "$RESPONSE"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "$SUMMARY" > "$OUTPUT_FILE"
-          echo "✅ Package Summary saved to $OUTPUT_FILE"
-
-          echo "docs_generated=true" >> $GITHUB_OUTPUT
-
-      - name: Commit Summary File
-        if: steps.generate_summary.outputs.docs_generated == 'true'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          PKG_ID="${{ github.event.inputs.package_id }}"
-          SUMMARY_PATH="cpi-artifacts/$PKG_ID/Package_Summary.md"
-
-          if [ ! -f "$SUMMARY_PATH" ]; then
-            echo "⚠ Summary file missing, skipping commit."
-            exit 0
-          fi
-
-          git add "$SUMMARY_PATH" || true
-
-          if git diff --cached --quiet; then
-            echo "ℹ No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "🤖 Auto-generated Package Summary for $PKG_ID (Groq API)"
-          git push
-          echo "🚀 Summary committed successfully."
+          echo "⚠ Unexpected response from Groq API. Key might be invalid or API unavailable."
+          exit 1
