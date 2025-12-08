@@ -22,7 +22,6 @@ jobs:
           sudo apt-get install -y jq unzip
 
       - name: Generate documentation per iFlow using Groq
-        id: doc
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
@@ -41,40 +40,49 @@ jobs:
 
           echo "📦 Processing Package: $PKG_ID"
 
-          # Loop each iFlow folder inside the package
+          # Loop through each iFlow directory
           find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d | while read IFLOW_DIR; do
 
             IFLOW_NAME=$(basename "$IFLOW_DIR")
             OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
 
-            echo "➡️ Creating summary for iFlow: $IFLOW_NAME"
+            echo "➡️ Generating summary for iFlow: $IFLOW_NAME"
 
-            # STEP 1 — Collect text-based source files
+            # STEP 1 — Collect readable text source files
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
-              -o -name "*.xslt" -o -name "*.xsl" \))
+                 -o -name "*.xslt" -o -name "*.xsl" \))
 
-            # STEP 2 — Extract .iflw (ZIP) and add extracted files
+            # STEP 2 — Handle .iflw files safely (zip OR xml)
             IFLW_FILES=$(find "$IFLOW_DIR" -type f -name "*.iflw")
 
             for IFLW in $IFLW_FILES; do
-              echo "📦 Extracting IFLW: $IFLW"
-              EXTRACT_DIR="$IFLOW_DIR/_extracted_$(basename "$IFLW")"
-              mkdir -p "$EXTRACT_DIR"
-              unzip -q "$IFLW" -d "$EXTRACT_DIR"
+              echo "📦 Checking IFLW file: $IFLW"
 
-              EXTRA_FILES=$(find "$EXTRACT_DIR" -type f \
-                \( -name "*.xml" -o -name "*.groovy" -o -name "*.json" \
-                   -name "*.xslt" -o -name "*.xsl" \))
+              if unzip -t "$IFLW" >/dev/null 2>&1; then
+                echo "📂 IFLW is ZIP — extracting..."
+                EXTRACT_DIR="$IFLOW_DIR/_extracted_$(basename "$IFLW")"
+                mkdir -p "$EXTRACT_DIR"
+                unzip -q "$IFLW" -d "$EXTRACT_DIR"
 
-              FILES="$FILES $EXTRA_FILES"
+                EXTRA_FILES=$(find "$EXTRACT_DIR" -type f \
+                  \( -name "*.xml" -o -name "*.groovy" -o -name "*.json" \
+                     -name "*.xslt" -o -name "*.xsl" \))
+
+                FILES="$FILES $EXTRA_FILES"
+              else
+                echo "📄 IFLW is plain XML — adding directly"
+                FILES="$FILES $IFLW"
+              fi
             done
 
+            # No readable files
             if [ -z "$FILES" ]; then
-              echo "⚠️ No readable artifacts found in $IFLOW_NAME"
+              echo "⚠️ No readable artifacts inside iFlow: $IFLOW_NAME"
               continue
             fi
 
+            # STEP 3 — Build content block
             CONTENT=""
             for FILE in $FILES; do
               echo "📄 Reading: $FILE"
@@ -82,24 +90,29 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$FILE_TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="
+            # STEP 4 — Build USER PROMPT (HEREDOC for safety)
+            read -r -d '' USER_PROMPT << EOF
             Analyze this SAP CPI iFlow and produce high-quality technical documentation.
 
             REQUIRED SECTIONS:
-            1. Purpose
-            2. Sender/Receiver systems
-            3. Adapters used
-            4. Step-by-step flow explanation
-            5. Mapping logic (if any)
-            6. Groovy script logic summary
-            7. Error handling
-            8. Security considerations
-            9. Additional notes
+            1. Purpose  
+            2. Sender/Receiver systems  
+            3. Adapter types used  
+            4. Step-by-step flow explanation  
+            5. Mapping logic (if any)  
+            6. Groovy script logic summary  
+            7. Error handling  
+            8. Security considerations  
+            9. Additional notes  
+
+        Full iFlow contents:
+
             \`\`\`text
             $CONTENT
             \`\`\`
-            "
+            EOF
 
+            # STEP 5 — Build API payload
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "You are a senior SAP CPI Integration Architect." \
@@ -113,6 +126,7 @@ jobs:
                 temperature: 0.1
               }')
 
+            # STEP 6 — Call Groq API
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
               -H "Content-Type: application/json" \
@@ -121,13 +135,14 @@ jobs:
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-              echo "❌ Summary failed for iFlow: $IFLOW_NAME"
-              echo "Response: $RESPONSE"
+              echo "❌ Groq summary generation failed for: $IFLOW_NAME"
+              echo "Response:"
+              echo "$RESPONSE"
               continue
             fi
 
             echo "$SUMMARY" > "$OUTPUT_FILE"
-            echo "📝 Summary written to: $OUTPUT_FILE"
+            echo "📝 Summary saved to: $OUTPUT_FILE"
 
           done
 
@@ -139,11 +154,11 @@ jobs:
           git add cpi-artifacts/**/iFlow_Summary.md || true
 
           if git diff --cached --quiet; then
-            echo "ℹ No new summaries to commit."
+            echo "ℹ No new documentation created."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated iFlow documentation using Groq"
+          git commit -m "🤖 Auto-generated iFlow documentation using Groq API"
           git push
 
           echo "🚀 Documentation committed successfully."
