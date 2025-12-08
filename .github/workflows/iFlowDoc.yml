@@ -1,10 +1,10 @@
-name: 🤖 Generate Single Consolidated Documentation for Package (Groq API)
+name: 🤖 Generate Consolidated Package Summary (Groq API)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "The ID of the CPI Integration Package (e.g., 'PDFconverter')."
+        description: "The ID of the CPI Integration Package (folder under cpi-artifacts)"
         required: true
         type: string
 
@@ -16,134 +16,145 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies (jq only)
+      - name: Install jq
         run: |
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Generate Consolidated Documentation via Groq API
-        id: documentation_step
+      - name: Generate Package Summary via Groq API
+        id: generate_summary
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          # --- Configuration ---
+          set -e
+
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="gpt-4o-mini"
+          MODEL_NAME="llama-3.3-70b-versatile"
 
           PKG_DIR="cpi-artifacts/$PKG_ID"
           OUTPUT_FILE="$PKG_DIR/Package_Summary.md"
 
           if [ ! -d "$PKG_DIR" ]; then
-            echo "::error::Package directory not found at: $PKG_DIR"
+            echo "::error:: Package not found: $PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "🔍 Consolidating ALL CPI artifacts into a single request for Package: $PKG_ID"
+          echo "📦 Collecting artifacts from package: $PKG_ID"
 
-          # --- System Prompt (YAML-safe) ---
-          SYSTEM_PROMPT=" You are a senior SAP CPI Technical Architect.
-           Your task is to analyze ALL provided code and configuration files from a single CPI package and synthesize them into ONE consolidated Markdown documentation report.
+          # -------------------------------------------
+          # SYSTEM PROMPT (Same structure as your Django pattern)
+          # -------------------------------------------
+          SYSTEM_PROMPT="
+You are a senior SAP CPI Technical Architect.
+Analyze ALL CPI artifacts inside a package and generate a single consolidated Markdown documentation.
 
-           Follow this 10-section structure:
+Follow EXACTLY this structure:
 
-           1. High-level architecture  
-           2. Purpose of each iFlow  
-           3. Sender/Receiver systems (Consolidated)  
-           4. Adapter types used (Consolidated)  
-           5. Step-by-step flow explanation (For each iFlow)  
-           6. Mapping logic summary  
-           7. Groovy script explanations  
-           8. Error handling  
-           9. Security/authentication  
-           10. Deployment notes"
+1. High-level architecture  
+2. Purpose of each iFlow  
+3. Sender/Receiver systems (Consolidated)  
+4. Adapter types used  
+5. Step-by-step flow explanation (per iFlow)  
+6. Mapping logic (XSLT, XML mappings)  
+7. Groovy script logic summary  
+8. Error handling  
+9. Security/authentication  
+10. Deployment notes  
 
-          # --- Data Consolidation ---
+Make the documentation extremely clear, structured, readable, and technically accurate.
+"
+
+          # -------------------------------------------
+          # COLLECT FILE CONTENT
+          # -------------------------------------------
           FULL_ARTIFACT_CONTENT=""
 
-          # Detect ALL possible CPI artifacts
-          FILES_TO_ANALYZE=$(find "$PKG_DIR" -type f \
-              \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
-              -o -name "*.xslt" -o -name "*.xsl" -o -name "*.iflw" \
-              -o -name "*.zip" \) )
+          # Detect all CPI file types
+          FILES=$(find "$PKG_DIR" -type f \
+            \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" -o -name "*.xsl" -o -name "*.xslt" -o -name "*.iflw" -o -name "*.zip" \))
 
-          if [ -z "$FILES_TO_ANALYZE" ]; then
-            echo "::warning::No supported artifacts found in package '$PKG_ID'."
+          if [ -z "$FILES" ]; then
+            echo "::warning::No supported artifacts found in package."
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Append file contents
-          for INPUT_FILE in $FILES_TO_ANALYZE; do
-            CONTENT=$(cat "$INPUT_FILE" 2>/dev/null || echo "[Binary unreadable content]")
-            FULL_ARTIFACT_CONTENT+="\n\n--- START ARTIFACT: $INPUT_FILE ---\n"
-            FULL_ARTIFACT_CONTENT+="$CONTENT"
-            FULL_ARTIFACT_CONTENT+="\n--- END ARTIFACT: $INPUT_FILE ---\n"
+          for FILE in $FILES; do
+            CONTENT=$(cat "$FILE" 2>/dev/null || echo "[Binary/unreadable content]")
+            FULL_ARTIFACT_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
           done
 
-          echo "Total size of consolidated input: ${#FULL_ARTIFACT_CONTENT} characters."
+          echo "📄 Total collected text size: ${#FULL_ARTIFACT_CONTENT} characters"
 
-          USER_QUERY="Synthesize a consolidated package-level documentation following the 10 mandatory sections.
-            \`\`\`text
-            $FULL_ARTIFACT_CONTENT
-            \`\`\`"
+          USER_PROMPT="
+Analyze all provided CPI artifacts and generate the package summary as instructed.
 
-          # --- Build Payload ---
+\`\`\`text
+$FULL_ARTIFACT_CONTENT
+\`\`\`
+"
+
+          # -------------------------------------------
+          # BUILD REQUEST PAYLOAD
+          # -------------------------------------------
           PAYLOAD=$(jq -n \
-            --arg system "$SYSTEM_PROMPT" \
-            --arg query "$USER_QUERY" \
+            --arg sys "$SYSTEM_PROMPT" \
+            --arg usr "$USER_PROMPT" \
             --arg model "$MODEL_NAME" \
             '{
               model: $model,
               messages: [
-                {role: "system", content: $system},
-                {role: "user", content: $query}
+                { "role": "system", "content": $sys },
+                { "role": "user", "content": $usr }
               ],
               temperature: 0.1
             }')
 
-          # --- API Call ---
-          API_RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-            -H "Content-Type: application/json" \
+          # -------------------------------------------
+          # CALL GROQ API
+          # -------------------------------------------
+          RESPONSE=$(curl -s -X POST "$GROQ_URL" \
             -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+            -H "Content-Type: application/json" \
             -d "$PAYLOAD")
 
-          GENERATED_TEXT=$(echo "$API_RESPONSE" | jq -r ".choices[0].message.content")
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-          if [ "$GENERATED_TEXT" == "null" ] || [ -z "$GENERATED_TEXT" ]; then
-            echo "❌ Groq API failed"
-            echo "$API_RESPONSE"
+          if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
+            echo "❌ Groq API failed:"
+            echo "$RESPONSE"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "  ✅ Consolidated Documentation generated successfully."
-          echo "$GENERATED_TEXT" > "$OUTPUT_FILE"
-          echo "  💾 Saved consolidated documentation to $OUTPUT_FILE"
+          echo "$SUMMARY" > "$OUTPUT_FILE"
+          echo "✅ Package Summary saved to $OUTPUT_FILE"
 
           echo "docs_generated=true" >> $GITHUB_OUTPUT
 
-      - name: Commit Consolidated Documentation
-        if: steps.documentation_step.outputs.docs_generated == 'true'
+      - name: Commit Summary File
+        if: steps.generate_summary.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           PKG_ID="${{ github.event.inputs.package_id }}"
-          OUTPUT_PATH="cpi-artifacts/$PKG_ID/Package_Summary.md"
+          SUMMARY_PATH="cpi-artifacts/$PKG_ID/Package_Summary.md"
 
-          if [ ! -f "$OUTPUT_PATH" ]; then
-            echo "⚠ No documentation file found to commit."
+          if [ ! -f "$SUMMARY_PATH" ]; then
+            echo "⚠ Summary file missing, skipping commit."
             exit 0
           fi
 
-          git add "$OUTPUT_PATH" || true
+          git add "$SUMMARY_PATH" || true
 
           if git diff --cached --quiet; then
-            echo "ℹ No meaningful documentation changes. Skipping commit."
+            echo "ℹ No changes to commit."
             exit 0
           fi
-          git commit -m "🤖 DOCS: Consolidated Package Summary generated for package: $PKG_ID (Groq API)"
+
+          git commit -m "🤖 Auto-generated Package Summary for $PKG_ID (Groq API)"
           git push
-          echo "✅ Documentation committed and pushed."
+          echo "🚀 Summary committed successfully."
