@@ -1,4 +1,4 @@
-name: 🤖 Generate iFlow-wise Documentation (Groq API)
+name: 🤖 Generate iFlow-wise Documentation (OpenAI LLaMA)
 
 on:
   workflow_dispatch:
@@ -21,15 +21,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq unzip
 
-      - name: Generate documentation per iFlow using Groq
+      - name: Generate documentation per iFlow using OpenAI LLaMA
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LLAMA_API_KEY: ${{ secrets.LLAMA_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
           set -e
 
-          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL="llama-3.3-70b-versatile"
+          LLAMA_URL="https://api.openai.com/v1/chat/completions"
+          MODEL="meta-llama/llama-3.3-70b-versatile"
+
           PKG_DIR="cpi-artifacts/$PKG_ID"
 
           if [ ! -d "$PKG_DIR" ]; then
@@ -47,48 +48,68 @@ jobs:
 
             echo "➡️ Generating summary for iFlow: $IFLOW_NAME"
 
-            # Collect readable text files
+            # STEP 1 — Collect readable text files
             FILES=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" -o -name "*.xslt" -o -name "*.xsl" \))
+              \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
+                 -name "*.xslt" -o -name "*.xsl" \))
 
-            # Detect and process .iflw files
+            # STEP 2 — Handle .iflw files (zip or xml)
             IFLW_FILES=$(find "$IFLOW_DIR" -type f -name "*.iflw")
 
             for IFLW in $IFLW_FILES; do
               echo "📦 Checking IFLW: $IFLW"
 
               if unzip -t "$IFLW" >/dev/null 2>&1; then
-                echo "📂 ZIP IFLW detected — extracting..."
-                EXTRACT_DIR="$IFLOW_DIR/_extract_$(basename "$IFLW")"
+                echo "📂 IFLW is ZIP — extracting..."
+                EXTRACT_DIR="$IFLOW_DIR/_extracted_$(basename "$IFLW")"
                 mkdir -p "$EXTRACT_DIR"
-                unzip -q "$IFLOW" -d "$EXTRACT_DIR"
+                unzip -q "$IFLW" -d "$EXTRACT_DIR"
 
-                EXTRA=$(find "$EXTRACT_DIR" -type f \
-                  \( -name "*.xml" -o -name "*.groovy" -o -name "*.json" -o -name "*.xslt" -o -name "*.xsl" \))
+                EXTRA_FILES=$(find "$EXTRACT_DIR" -type f \
+                  \( -name "*.xml" -o -name "*.groovy" -o -name "*.json" \
+                     -name "*.xslt" -o -name "*.xsl" \))
 
-                FILES="$FILES $EXTRA"
+                FILES="$FILES $EXTRA_FILES"
               else
-                echo "📄 Plain XML IFLW detected — adding directly"
+                echo "📄 IFLW is plain XML — adding directly"
                 FILES="$FILES $IFLW"
               fi
             done
 
             if [ -z "$FILES" ]; then
-              echo "⚠️ No readable artifacts inside iFlow"
+              echo "⚠ No readable artifacts inside iFlow: $IFLOW_NAME"
               continue
             fi
 
-            # Build collected content
+            # STEP 3 — Build content for AI
             CONTENT=""
             for FILE in $FILES; do
-              TEXT=$(cat "$FILE" 2>/dev/null || echo "[unreadable]")
-              CONTENT="${CONTENT}\n--- START FILE: $FILE ---\n${TEXT}\n--- END FILE: $FILE ---\n"
+              echo "📄 Reading: $FILE"
+              TEXT=$(cat "$FILE" 2>/dev/null || echo "[unreadable file]")
+              CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            # Build Groq prompt WITHOUT HEREDOC
-            USER_PROMPT="Analyze this SAP CPI iFlow and produce high-quality technical documentation.\n\nREQUIRED SECTIONS:\n1. Purpose\n2. Sender/Receiver systems\n3. Adapter types used\n4. Step-by-step flow explanation\n5. Mapping logic (if any)\n6. Groovy script logic summary\n7. Error handling\n8. Security considerations\n9. Additional notes\n\nFull iFlow contents:\n\`\`\`text\n${CONTENT}\n\`\`\`"
+            # STEP 4 — Build USER PROMPT
+            USER_PROMPT="
+            Analyze this SAP CPI iFlow and produce high-quality technical documentation.
 
-            # Prepare Groq JSON payload
+            REQUIRED SECTIONS:
+            1. Purpose
+            2. Sender/Receiver systems
+            3. Adapter types used
+            4. Step-by-step flow explanation
+            5. Mapping logic (if any)
+            6. Groovy script logic summary
+            7. Error handling
+            8. Security considerations
+            9. Additional notes
+
+            \`\`\`text
+            $CONTENT
+            \`\`\`
+            "
+
+            # STEP 5 — Build API payload
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "You are a senior SAP CPI Integration Architect." \
@@ -102,21 +123,23 @@ jobs:
                 temperature: 0.1
               }')
 
-            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+            # STEP 6 — Call OpenAI API
+            RESPONSE=$(curl -s -X POST "$LLAMA_URL" \
+              -H "Authorization: Bearer '"$LLAMA_API_KEY"'" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-              echo "❌ Failed to generate summary for $IFLOW_NAME"
+              echo "❌ Summary generation failed for iFlow: $IFLOW_NAME"
+              echo "Response:"
               echo "$RESPONSE"
               continue
             fi
 
             echo "$SUMMARY" > "$OUTPUT_FILE"
-            echo "📝 Summary saved to $OUTPUT_FILE"
+            echo "📝 Summary saved: $OUTPUT_FILE"
 
           done
 
@@ -128,11 +151,11 @@ jobs:
           git add cpi-artifacts/**/iFlow_Summary.md || true
 
           if git diff --cached --quiet; then
-            echo "ℹ No new documentation."
+            echo "ℹ No new summaries generated."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated iFlow documentation using Groq"
+          git commit -m "🤖 Auto-generated iFlow documentation using LLaMA"
           git push
 
           echo "🚀 Documentation committed successfully."
