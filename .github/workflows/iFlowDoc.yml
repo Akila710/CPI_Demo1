@@ -42,29 +42,24 @@ jobs:
           fi
 
           echo "📦 Collecting artifacts from package: $PKG_ID"
-
           # -------------------------------------------
           # SYSTEM PROMPT (Same structure as your Django pattern)
           # -------------------------------------------
-          SYSTEM_PROMPT="
-You are a senior SAP CPI Technical Architect.
-Analyze ALL CPI artifacts inside a package and generate a single consolidated Markdown documentation.
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Analyze ALL CPI artifacts inside a package and generate a single consolidated Markdown documentation.
+          Follow EXACTLY this structure:
 
-Follow EXACTLY this structure:
+          1. High-level architecture  
+          2. Purpose of each iFlow  
+          3. Sender/Receiver systems (Consolidated)  
+          4. Adapter types used  
+          5. Step-by-step flow explanation (per iFlow)  
+          6. Mapping logic (XSLT, XML mappings)  
+          7. Groovy script logic summary  
+          8. Error handling  
+          9. Security/authentication  
+          10. Deployment notes  
 
-1. High-level architecture  
-2. Purpose of each iFlow  
-3. Sender/Receiver systems (Consolidated)  
-4. Adapter types used  
-5. Step-by-step flow explanation (per iFlow)  
-6. Mapping logic (XSLT, XML mappings)  
-7. Groovy script logic summary  
-8. Error handling  
-9. Security/authentication  
-10. Deployment notes  
-
-Make the documentation extremely clear, structured, readable, and technically accurate.
-"
+          Make the documentation extremely clear, structured, readable, and technically accurate."
 
           # -------------------------------------------
           # COLLECT FILE CONTENT
