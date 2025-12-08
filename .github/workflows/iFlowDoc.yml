@@ -51,9 +51,9 @@ jobs:
             # STEP 1 — Collect readable text source files
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
-                 -o -name "*.xslt" -o -name "*.xsl" \))
+                 -name "*.xslt" -o -name "*.xsl" \))
 
-            # STEP 2 — Handle .iflw files safely (zip OR xml)
+            # STEP 2 — Handle .iflw files (zip OR xml)
             IFLW_FILES=$(find "$IFLOW_DIR" -type f -name "*.iflw")
 
             for IFLW in $IFLW_FILES; do
@@ -71,18 +71,17 @@ jobs:
 
                 FILES="$FILES $EXTRA_FILES"
               else
-                echo "📄 IFLW is plain XML — adding directly"
+                echo "📄 IFLW is plain XML — adding as text"
                 FILES="$FILES $IFLW"
               fi
             done
 
-            # No readable files
             if [ -z "$FILES" ]; then
               echo "⚠️ No readable artifacts inside iFlow: $IFLOW_NAME"
               continue
             fi
 
-            # STEP 3 — Build content block
+            # STEP 3 — Build content block for AI
             CONTENT=""
             for FILE in $FILES; do
               echo "📄 Reading: $FILE"
@@ -90,29 +89,29 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$FILE_TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            # STEP 4 — Build USER PROMPT (HEREDOC for safety)
+            # STEP 4 — HEREDOC user prompt
             read -r -d '' USER_PROMPT << EOF
             Analyze this SAP CPI iFlow and produce high-quality technical documentation.
 
-            REQUIRED SECTIONS:
-            1. Purpose  
-            2. Sender/Receiver systems  
-            3. Adapter types used  
-            4. Step-by-step flow explanation  
-            5. Mapping logic (if any)  
-            6. Groovy script logic summary  
-            7. Error handling  
-            8. Security considerations  
-            9. Additional notes  
+        REQUIRED SECTIONS:
+           1. Purpose  
+           2. Sender/Receiver systems  
+           3. Adapter types used  
+           4. Step-by-step flow explanation  
+           5. Mapping logic (if any)  
+           6. Groovy script logic summary  
+           7. Error handling  
+           8. Security considerations  
+           9. Additional notes  
 
-        Full iFlow contents:
+Full iFlow contents:
 
-            \`\`\`text
-            $CONTENT
-            \`\`\`
-            EOF
+          \`\`\`text
+          $CONTENT
+          \`\`\`
+                      EOF
 
-            # STEP 5 — Build API payload
+            # STEP 5 — Build Groq API payload
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "You are a senior SAP CPI Integration Architect." \
