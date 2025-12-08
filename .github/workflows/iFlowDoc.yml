@@ -86,9 +86,9 @@ jobs:
 
           USER_QUERY="Synthesize a consolidated package-level documentation following the 10 mandatory sections.
 
-\`\`\`text
-$FULL_ARTIFACT_CONTENT
-\`\`\`"
+         \`\`\`text
+         $FULL_ARTIFACT_CONTENT
+         \`\`\`"
 
           # --- Build Payload ---
           PAYLOAD=$(jq -n \
