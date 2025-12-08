@@ -1,19 +1,19 @@
-name: 🤖 Generate Consolidated Package Summary (Groq API)
+name: 🤖 Generate iFlow-wise Documentation (Groq API)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "Enter CPI Package ID (folder under cpi-artifacts)"
+        description: "CPI Package folder under cpi-artifacts"
         required: true
         type: string
 
 jobs:
-  document:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install jq
@@ -21,8 +21,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq
 
-      - name: Generate Summary (Groq)
-        id: generate_summary
+      - name: Generate documentation per iFlow using Groq
+        id: doc
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
@@ -33,102 +33,102 @@ jobs:
           MODEL="llama-3.3-70b-versatile"
 
           PKG_DIR="cpi-artifacts/$PKG_ID"
-          OUTPUT_FILE="$PKG_DIR/Package_Summary.md"
 
           if [ ! -d "$PKG_DIR" ]; then
-            echo "::error::Package not found"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
+            echo "::error::Package not found: $PKG_DIR"
             exit 1
           fi
 
-          echo "📦 Collecting artifacts from: $PKG_ID"
+          echo "📦 Processing Package: $PKG_ID"
 
-          SYSTEM_PROMPT="
-          You are a senior SAP CPI Technical Architect.
-          Generate a single consolidated Markdown documentation for the package.
-          Follow EXACTLY this structure:
+          # Loop each iFlow folder inside package
+          find "$PKG_DIR" -mindepth 1 -maxdepth 1 -type d | while read IFLOW_DIR; do
 
-             1. High-level architecture  
-             2. Purpose of each iFlow  
-             3. Sender/Receiver systems  
-             4. Adapter types used  
-             5. Flow logic (per iFlow)  
-             6. Mapping logic  
-             7. Groovy scripts explanation  
-             8. Error handling  
-             9. Security  
-             10. Deployment notes
-             "
+            IFLOW_NAME=$(basename "$IFLOW_DIR")
+            OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
 
-          FULL_ARTIFACT_CONTENT=""
+            echo "➡️ Creating summary for iFlow: $IFLOW_NAME"
 
-          FILES=$(find "$PKG_DIR" -type f \
-            \( -name "*.xml" -o -name "*.json" -o -name "*.xslt" \
-            -o -name "*.xsl" -o -name "*.groovy" -o -name "*.iflw" \))
+            # Gather files
+            FILES=$(find "$IFLOW_DIR" -type f \
+              \( -name "*.xml" -o -name "*.json" -o -name "*.groovy" \
+              -o -name "*.xslt" -o -name "*.xsl" -o -name "*.iflw" \))
 
-          if [ -z "$FILES" ]; then
-            echo "⚠ No artifacts found"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+            if [ -z "$FILES" ]; then
+              echo "⚠️ No supported files found in $IFLOW_NAME, skipping."
+              continue
+            fi
 
-          for FILE in $FILES; do
-            CONTENT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
-            FULL_ARTIFACT_CONTENT+="\n--- START ARTIFACT: $FILE ---\n$CONTENT\n--- END ARTIFACT: $FILE ---\n"
+            CONTENT=""
+            for FILE in $FILES; do
+              FILE_TEXT=$(cat "$FILE" 2>/dev/null || echo "[binary/unreadable]")
+              CONTENT+="\n--- START FILE: $FILE ---\n$FILE_TEXT\n--- END FILE: $FILE ---\n"
+            done
+
+            # Small prompt to avoid huge payloads
+            USER_PROMPT="
+            Analyze this CPI iFlow and generate clean technical documentation.
+
+            REQUIRED SECTIONS:
+            1. Purpose
+            2. Sender/Receiver systems
+            3. Adapters
+            4. Step-by-step flow explanation
+            5. Mapping logic (if any)
+            6. Groovy script logic
+            7. Error handling
+            8. Security
+            9. Notes
+
+            \`\`\`text
+            $CONTENT
+            \`\`\`
+            "
+
+            PAYLOAD=$(jq -n \
+              --arg model "$MODEL" \
+              --arg sys "You are a senior SAP CPI Integration Architect." \
+              --arg usr "$USER_PROMPT" \
+              '{
+                model: $model,
+                messages: [
+                  {"role":"system","content": $sys},
+                  {"role":"user","content": $usr}
+                ],
+                temperature: 0.1
+              }')
+
+            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
+              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+
+            if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
+              echo "❌ Summary failed for iFlow: $IFLOW_NAME"
+              echo "Response: $RESPONSE"
+              continue
+            fi
+
+            echo "$SUMMARY" > "$OUTPUT_FILE"
+            echo "📝 Summary written to: $OUTPUT_FILE"
+
           done
 
-          USER_PROMPT="
-          Analyze all CPI artifacts and generate the summary.
-          \`\`\`
-          $FULL_ARTIFACT_CONTENT
-          \`\`\`
-          "
-
-          PAYLOAD=$(jq -n \
-            --arg sys "$SYSTEM_PROMPT" \
-            --arg usr "$USER_PROMPT" \
-            --arg model "$MODEL" \
-            '{
-              model: $model,
-              messages: [
-                {"role":"system", "content": $sys},
-                {"role":"user", "content": $usr}
-              ]
-            }')
-
-          RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-            -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD")
-
-          SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-
-          if [ -z "$SUMMARY" ] || [ "$SUMMARY" == "null" ]; then
-            echo "❌ Groq API failed"
-            echo "$RESPONSE"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          echo "$SUMMARY" > "$OUTPUT_FILE"
-          echo "docs_generated=true" >> $GITHUB_OUTPUT
-
-      - name: Commit summary
-        if: steps.generate_summary.outputs.docs_generated == 'true'
+      - name: Commit generated summaries
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          PKG_ID="${{ github.event.inputs.package_id }}"
-          OUTPUT_FILE="cpi-artifacts/$PKG_ID/Package_Summary.md"
-
-          git add "$OUTPUT_FILE" || true
+          git add cpi-artifacts/**/iFlow_Summary.md || true
 
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "ℹ No new summaries to commit."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated Package Summary for $PKG_ID (Groq API)"
+          git commit -m "🤖 Auto-generated iFlow summaries using Groq"
           git push
-          echo "Committed!"
+
+          echo "🚀 Documentation committed."
