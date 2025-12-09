@@ -1,4 +1,4 @@
-name: 🤖 Generate Individual iFlow Documentation (DOCX/PDF)
+name: 🤖 Generate Individual iFlow Documentation (DOCX Only)
 
 on:
   workflow_dispatch:
@@ -30,7 +30,7 @@ jobs:
           API_URL="https://api.openai.com/v1/chat/completions"
           MODEL_NAME="gpt-4o-mini"
 
-          # Choose output here: "docx" or "pdf"
+          # Choose DOCX or PDF
           OUTPUT_FORMAT="docx"
 
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
@@ -40,8 +40,19 @@ jobs:
             exit 1
           fi
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze ALL provided code and configuration files from the SINGLE iFlow provided and synthesize them into ONE consolidated Markdown documentation report. You MUST adhere strictly to the following 10-point structure..."
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze ALL provided code and configuration files from the SINGLE iFlow provided and synthesize them into ONE consolidated Markdown documentation report. You MUST adhere strictly to the 10-point structure:
+          1. High-level architecture
+          2. Purpose of this iFlow
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow explanation
+          6. Mapping logic summary
+          7. Groovy script explanations
+          8. Error handling
+          9. Security/authentication details
+          10. Mermaid process diagram using 'graph TD' (blank line after closing ```)."
 
+          # Find iFlows
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.iflw' \))
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning::No iFlows found."
@@ -64,6 +75,12 @@ jobs:
             FULL_ARTIFACT_CONTENT=""
             FILES_TO_ANALYZE=$(find "$IFLOW_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' -o -name '*.iflw' \))
 
+            if [ -z "$FILES_TO_ANALYZE" ]; then
+                echo "⚠️ No supported artifacts found in $IFLOW_DIR. Skipping."
+                continue
+            fi
+
+            # Collect all file contents
             for INPUT_FILE in $FILES_TO_ANALYZE; do
               FILE_CONTENT=$(cat "$INPUT_FILE")
               FULL_ARTIFACT_CONTENT+="\n\n--- START ARTIFACT: $INPUT_FILE ---\n"
@@ -71,7 +88,7 @@ jobs:
               FULL_ARTIFACT_CONTENT+="\n--- END ARTIFACT: $INPUT_FILE ---\n"
             done
 
-            USER_QUERY="Synthesize using the 10 mandatory sections:\n\n\`\`\`text\n$FULL_ARTIFACT_CONTENT\n\`\`\`"
+            USER_QUERY="Synthesize using the mandatory sections:\n\n\`\`\`text\n$FULL_ARTIFACT_CONTENT\n\`\`\`"
 
             PAYLOAD=$(jq -n \
               --arg system "$SYSTEM_PROMPT" \
@@ -98,6 +115,8 @@ jobs:
               GENERATED_TEXT=$(echo "$API_RESPONSE" | jq -r ".choices[0].message.content")
 
               if [ "$GENERATED_TEXT" != "null" ]; then
+
+                # Save temporary Markdown
                 echo "$GENERATED_TEXT" > "$MD_FILE"
 
                 echo "  🔄 Converting Markdown → $OUTPUT_FORMAT"
@@ -108,11 +127,15 @@ jobs:
                   pandoc "$MD_FILE" -o "$FINAL_DOC"
                 fi
 
+                # Remove .md file (ONLY keep final .docx or .pdf)
+                rm "$MD_FILE"
+
                 echo "  💾 Saved: $FINAL_DOC"
                 ALL_DOCS_GENERATED=true
                 break
               else
                 RETRIES=$((RETRIES+1))
+                echo "Retry $RETRIES..."
                 sleep $((2**RETRIES))
               fi
             done
@@ -134,6 +157,6 @@ jobs:
           if git diff --cached --quiet "$OUTPUT_PATH"; then
               echo "No new changes."
           else
-              git commit -m "🤖 DOCS: Generated iFlow documentation in DOCX/PDF for package: $PKG_ID"
+              git commit -m "🤖 DOCS: Generated iFlow documentation (DOCX only) for package: $PKG_ID"
               git push
           fi
