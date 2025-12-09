@@ -1,10 +1,10 @@
-name: 🤖 Generate Individual iFlow Documentation (DOCX/PDF)
+name: 🤖 Generate Individual iFlow Documentation (DOCX Only)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "The ID of the CPI Integration Package (e.g., 'PDFcoveter')."
+        description: "CPI Integration Package ID (e.g., Demo)"
         required: true
         type: string
 
@@ -13,127 +13,189 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # -------------------------
+      # CHECKOUT
+      # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # required for git pull --rebase
 
-      - name: Install Dependencies (jq + pandoc + latex)
+      # -------------------------
+      # INSTALL DEPENDENCIES
+      # -------------------------
+      - name: Install jq + pandoc + latex
         run: |
           sudo apt-get update
           sudo apt-get install -y jq pandoc texlive texlive-latex-extra
 
+      # -------------------------
+      # GENERATE DOCX DOCUMENTATION
+      # -------------------------
       - name: Generate Individual iFlow Documentation via OpenAI API
         id: documentation_step
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
+          set -e
+
           API_URL="https://api.openai.com/v1/chat/completions"
           MODEL_NAME="gpt-4o-mini"
-
-          # Choose output here: "docx" or "pdf"
           OUTPUT_FORMAT="docx"
 
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
           if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error::Package directory not found: $BASE_PKG_DIR"
+            echo "::error::Package folder not found: $BASE_PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze ALL provided code and configuration files from the SINGLE iFlow provided and synthesize them into ONE consolidated Markdown documentation report. You MUST adhere strictly to the following 10-point structure..."
+          # -------------------------
+          # SAFE SYSTEM PROMPT HEREDOC
+          # -------------------------
+          read -r -d '' SYSTEM_PROMPT << 'EOF'
+          You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
-          FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.iflw' \))
-          if [ -z "$FULL_IFLOW_PATHS" ]; then
+          1. High-level architecture
+          2. Purpose of this iFlow
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow explanation
+          6. Mapping logic summary (XSLT, mappings)
+          7. Groovy script explanation
+          8. Error handling
+          9. Security/authentication
+          10. High-Level Process Flow Diagram (Mermaid)
+
+          IMPORTANT:
+          DO NOT use triple backticks for Mermaid.  
+          Instead wrap the diagram like:
+
+          <MERMAID>
+            graph TD
+            Sender --> CPI
+            CPI --> Receiver
+          </MERMAID>
+          EOF
+
+          echo "🔍 Searching for iFlows inside $BASE_PKG_DIR ..."
+
+          # find all iFlow definitions
+          IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.iflw" \))
+          if [ -z "$IFLOW_PATHS" ]; then
             echo "::warning::No iFlows found."
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          IFLOW_ROOT_NAMES=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-          IFLOW_FOLDERS=$(echo "$IFLOW_ROOT_NAMES" | xargs -I {} echo "$BASE_PKG_DIR/{}")
+          ROOT_FOLDERS=$(echo "$IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
 
-          ALL_DOCS_GENERATED=false
+          ALL_DOCS=false
 
-          for IFLOW_DIR in $IFLOW_FOLDERS; do
+          # -------------------------
+          # PROCESS EACH IFLOW
+          # -------------------------
+          for ROOT in $ROOT_FOLDERS; do
+            IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME=$(basename "$IFLOW_DIR")
-            MD_FILE="$IFLOW_DIR/iFlow_Summary.md"
-            FINAL_DOC="$IFLOW_DIR/iFlow_Summary.$OUTPUT_FORMAT"
+
+            MD_TEMP="$IFLOW_DIR/iFlow_Summary.md"
+            FINAL_DOC="$IFLOW_DIR/iFlow_Summary.docx"
+            QUERY_FILE="$IFLOW_DIR/query.txt"
 
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            FULL_ARTIFACT_CONTENT=""
-            FILES_TO_ANALYZE=$(find "$IFLOW_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' -o -name '*.iflw' \))
+            # Collect ALL artifacts content
+            ARTIFACT_DATA=""
+            FILE_LIST=$(find "$IFLOW_DIR" -type f \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
 
-            for INPUT_FILE in $FILES_TO_ANALYZE; do
-              FILE_CONTENT=$(cat "$INPUT_FILE")
-              FULL_ARTIFACT_CONTENT+="\n\n--- START ARTIFACT: $INPUT_FILE ---\n"
-              FULL_ARTIFACT_CONTENT+="$FILE_CONTENT"
-              FULL_ARTIFACT_CONTENT+="\n--- END ARTIFACT: $INPUT_FILE ---\n"
+            for FILE in $FILE_LIST; do
+              CONTENT=$(cat "$FILE")
+              ARTIFACT_DATA="${ARTIFACT_DATA}\n\n--- FILE: $FILE ---\n${CONTENT}\n--- END FILE ---\n"
             done
 
-            USER_QUERY="Synthesize using the 10 mandatory sections:\n\n\`\`\`text\n$FULL_ARTIFACT_CONTENT\n\`\`\`"
+            # Build user query
+            USER_QUERY=$(printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" "$IFLOW_NAME" "$ARTIFACT_DATA")
+            echo "$USER_QUERY" > "$QUERY_FILE"
 
+            # -------------------------
+            # BUILD OPENAI PAYLOAD USING --rawfile (NO SIZE LIMIT)
+            # -------------------------
             PAYLOAD=$(jq -n \
               --arg system "$SYSTEM_PROMPT" \
-              --arg query "$USER_QUERY" \
+              --rawfile query "$QUERY_FILE" \
               --arg model "$MODEL_NAME" \
               '{
                 model: $model,
                 messages: [
-                  {role: "system", content: $system},
-                  {role: "user", content: $query}
+                  {role:"system", content:$system},
+                  {role:"user", content:$query}
                 ],
                 temperature: 0.1
               }')
 
-            MAX_RETRIES=3
-            RETRIES=0
-
-            while [ $RETRIES -lt $MAX_RETRIES ]; do
-              API_RESPONSE=$(curl -s -X POST "$API_URL" \
+            # -------------------------
+            # CALL OPENAI API
+            # -------------------------
+            RESPONSE=$(curl -s -X POST "$API_URL" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
                 -d "$PAYLOAD")
 
-              GENERATED_TEXT=$(echo "$API_RESPONSE" | jq -r ".choices[0].message.content")
+            echo "🔍 RAW API RESPONSE:"
+            echo "$RESPONSE"
 
-              if [ "$GENERATED_TEXT" != "null" ]; then
-                echo "$GENERATED_TEXT" > "$MD_FILE"
+            ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty')
+            if [ -n "$ERROR_MSG" ]; then
+              echo "❌ OpenAI API Error: $ERROR_MSG"
+              continue
+            fi
 
-                echo "  🔄 Converting Markdown → $OUTPUT_FORMAT"
+            GENERATED_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+            if [ -z "$GENERATED_TEXT" ]; then
+              echo "❌ No documentation returned for $IFLOW_NAME"
+              continue
+            fi
 
-                if [ "$OUTPUT_FORMAT" = "pdf" ]; then
-                  pandoc "$MD_FILE" -o "$FINAL_DOC" --pdf-engine=xelatex
-                else
-                  pandoc "$MD_FILE" -o "$FINAL_DOC"
-                fi
+            echo "$GENERATED_TEXT" > "$MD_TEMP"
 
-                echo "  💾 Saved: $FINAL_DOC"
-                ALL_DOCS_GENERATED=true
-                break
-              else
-                RETRIES=$((RETRIES+1))
-                sleep $((2**RETRIES))
-              fi
-            done
+            echo "📄 Converting to DOCX..."
+            pandoc "$MD_TEMP" -o "$FINAL_DOC"
+
+            echo "🧹 Cleaning up temporary files..."
+            rm "$MD_TEMP" "$QUERY_FILE"
+
+            echo "✅ Saved DOCX: $FINAL_DOC"
+
+            ALL_DOCS=true
+
           done
 
-          echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
+          echo "docs_generated=$ALL_DOCS" >> $GITHUB_OUTPUT
 
-      - name: Commit All Generated Documentation
+      # -------------------------
+      # COMMIT GENERATED DOCX
+      # -------------------------
+      - name: Commit Generated DOCX Files
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           PKG_ID="${{ github.event.inputs.package_id }}"
-          OUTPUT_PATH="cpi-artifacts/$PKG_ID/**/iFlow_Summary.*"
 
-          git add "$OUTPUT_PATH"
+          git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.docx
 
-          if git diff --cached --quiet "$OUTPUT_PATH"; then
-              echo "No new changes."
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
           else
-              git commit -m "🤖 DOCS: Generated iFlow documentation in DOCX/PDF for package: $PKG_ID"
-              git push
+            echo "📥 Pulling latest changes..."
+            git pull --rebase origin main
+
+            echo "📝 Committing..."
+            git commit -m "🤖 Generated iFlow DOCX documentation for package: $PKG_ID"
+
+            echo "🚀 Pushing..."
+            git push origin main
           fi
