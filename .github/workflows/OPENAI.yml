@@ -81,8 +81,7 @@ jobs:
             Sender --> CPI
             CPI --> Receiver
           </MERMAID>
-           EOF
-           
+          EOF   
           echo "🔍 Searching for iFlows inside $BASE_PKG_DIR ..."
 
           # Find all iFlow roots
