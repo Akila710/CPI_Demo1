@@ -1,4 +1,4 @@
-name: 🤖 Generate Individual iFlow Documentation (DOCX Only)
+name: 🤖 Generate Individual iFlow Documentation (DOCX/PDF)
 
 on:
   workflow_dispatch:
@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # <--- IMPORTANT for git pull to work
 
       - name: Install Dependencies (jq + pandoc + latex)
         run: |
@@ -29,31 +31,19 @@ jobs:
         run: |
           API_URL="https://api.openai.com/v1/chat/completions"
           MODEL_NAME="gpt-4o-mini"
-
-          # Choose DOCX or PDF
-          OUTPUT_FORMAT="docx"
-
+          OUTPUT_FORMAT="docx"   # Choose docx or pdf
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error::Package directory not found: $BASE_PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze ALL provided code and configuration files from the SINGLE iFlow provided and synthesize them into ONE consolidated Markdown documentation report. You MUST adhere strictly to the 10-point structure:
-          1. High-level architecture
-          2. Purpose of this iFlow
-          3. Sender/Receiver systems
-          4. Adapter types used
-          5. Step-by-step flow explanation
-          6. Mapping logic summary
-          7. Groovy script explanations
-          8. Error handling
-          9. Security/authentication details
-          10. Mermaid process diagram using 'graph TD' (blank line after closing ```)."
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your task is to analyze all provided artifacts and generate a 10-section Markdown document..."
 
-          # Find iFlows
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.iflw' \))
+
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning::No iFlows found."
             echo "docs_generated=false" >> $GITHUB_OUTPUT
@@ -61,84 +51,51 @@ jobs:
           fi
 
           IFLOW_ROOT_NAMES=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-          IFLOW_FOLDERS=$(echo "$IFLOW_ROOT_NAMES" | xargs -I {} echo "$BASE_PKG_DIR/{}")
-
           ALL_DOCS_GENERATED=false
 
-          for IFLOW_DIR in $IFLOW_FOLDERS; do
+          for ROOT in $IFLOW_ROOT_NAMES; do
+            IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME=$(basename "$IFLOW_DIR")
+
             MD_FILE="$IFLOW_DIR/iFlow_Summary.md"
             FINAL_DOC="$IFLOW_DIR/iFlow_Summary.$OUTPUT_FORMAT"
 
-            echo "➡ Processing iFlow: $IFLOW_NAME"
+            echo "➡ Processing $IFLOW_NAME"
 
             FULL_ARTIFACT_CONTENT=""
-            FILES_TO_ANALYZE=$(find "$IFLOW_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' -o -name '*.iflw' \))
-
-            if [ -z "$FILES_TO_ANALYZE" ]; then
-                echo "⚠️ No supported artifacts found in $IFLOW_DIR. Skipping."
-                continue
-            fi
-
-            # Collect all file contents
-            for INPUT_FILE in $FILES_TO_ANALYZE; do
-              FILE_CONTENT=$(cat "$INPUT_FILE")
-              FULL_ARTIFACT_CONTENT+="\n\n--- START ARTIFACT: $INPUT_FILE ---\n"
-              FULL_ARTIFACT_CONTENT+="$FILE_CONTENT"
-              FULL_ARTIFACT_CONTENT+="\n--- END ARTIFACT: $INPUT_FILE ---\n"
+            for FILE in $(find "$IFLOW_DIR" -type f -name '*.groovy' -o -name '*.xslt' -o -name '*.iflw' -o -name 'iFlowContent.xml'); do
+              CONTENT=$(cat "$FILE")
+              FULL_ARTIFACT_CONTENT="${FULL_ARTIFACT_CONTENT}\n\n--- FILE: $FILE ---\n$CONTENT\n--- END FILE ---\n"
             done
 
-            USER_QUERY="Synthesize using the mandatory sections:\n\n\`\`\`text\n$FULL_ARTIFACT_CONTENT\n\`\`\`"
+            USER_QUERY=$(printf "Generate documentation for iFlow '%s':\n%s" "$IFLOW_NAME" "$FULL_ARTIFACT_CONTENT")
 
             PAYLOAD=$(jq -n \
               --arg system "$SYSTEM_PROMPT" \
               --arg query "$USER_QUERY" \
               --arg model "$MODEL_NAME" \
-              '{
-                model: $model,
-                messages: [
-                  {role: "system", content: $system},
-                  {role: "user", content: $query}
-                ],
-                temperature: 0.1
-              }')
+              '{model:$model, messages:[{role:"system",content:$system},{role:"user",content:$query}], temperature:0.1}')
 
-            MAX_RETRIES=3
-            RETRIES=0
-
-            while [ $RETRIES -lt $MAX_RETRIES ]; do
-              API_RESPONSE=$(curl -s -X POST "$API_URL" \
+            RESPONSE=$(curl -s -X POST "$API_URL" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
                 -d "$PAYLOAD")
 
-              GENERATED_TEXT=$(echo "$API_RESPONSE" | jq -r ".choices[0].message.content")
+            GENERATED_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
 
-              if [ "$GENERATED_TEXT" != "null" ]; then
+            if [ -n "$GENERATED_TEXT" ]; then
+              echo "$GENERATED_TEXT" > "$MD_FILE"
 
-                # Save temporary Markdown
-                echo "$GENERATED_TEXT" > "$MD_FILE"
+              echo "🔄 Converting to $OUTPUT_FORMAT..."
+              pandoc "$MD_FILE" -o "$FINAL_DOC"
 
-                echo "  🔄 Converting Markdown → $OUTPUT_FORMAT"
+              echo "🧹 Removing temporary markdown..."
+              rm "$MD_FILE"
 
-                if [ "$OUTPUT_FORMAT" = "pdf" ]; then
-                  pandoc "$MD_FILE" -o "$FINAL_DOC" --pdf-engine=xelatex
-                else
-                  pandoc "$MD_FILE" -o "$FINAL_DOC"
-                fi
+              echo "✅ Saved: $FINAL_DOC"
 
-                # Remove .md file (ONLY keep final .docx or .pdf)
-                rm "$MD_FILE"
-
-                echo "  💾 Saved: $FINAL_DOC"
-                ALL_DOCS_GENERATED=true
-                break
-              else
-                RETRIES=$((RETRIES+1))
-                echo "Retry $RETRIES..."
-                sleep $((2**RETRIES))
-              fi
-            done
+              ALL_DOCS_GENERATED=true
+            fi
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
@@ -152,11 +109,17 @@ jobs:
           PKG_ID="${{ github.event.inputs.package_id }}"
           OUTPUT_PATH="cpi-artifacts/$PKG_ID/**/iFlow_Summary.*"
 
-          git add "$OUTPUT_PATH"
+          git add $OUTPUT_PATH
 
-          if git diff --cached --quiet "$OUTPUT_PATH"; then
-              echo "No new changes."
+          if git diff --cached --quiet; then
+            echo "No new changes."
           else
-              git commit -m "🤖 DOCS: Generated iFlow documentation (DOCX only) for package: $PKG_ID"
-              git push
+            echo "📥 Pulling latest updates..."
+            git pull --rebase origin main   # <--- FIXES PUSH REJECTS
+
+            echo "📝 Committing changes..."
+            git commit -m "🤖 Generated iFlow documentation for $PKG_ID"
+
+            echo "🚀 Pushing changes..."
+            git push origin main
           fi
