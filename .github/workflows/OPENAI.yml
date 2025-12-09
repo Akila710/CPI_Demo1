@@ -13,8 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # -------------------------
-      # CHECKOUT
+      # CHECKOUT (IMPORTANT)
       # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -28,6 +29,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y jq pandoc texlive texlive-latex-extra
+
 
       # -------------------------
       # GENERATE DOCX DOCUMENTATION
@@ -45,14 +47,16 @@ jobs:
           OUTPUT_FORMAT="docx"
 
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error::Package folder not found: $BASE_PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
+
           # -------------------------
-          # SAFE SYSTEM PROMPT HEREDOC
+          # SYSTEM PROMPT (NO INDENTATION)
           # -------------------------
           read -r -d '' SYSTEM_PROMPT << 'EOF'
           You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
@@ -69,7 +73,7 @@ jobs:
           10. High-Level Process Flow Diagram (Mermaid)
 
           IMPORTANT:
-          DO NOT use triple backticks for Mermaid.  
+          DO NOT use triple backticks for Mermaid.
           Instead wrap the diagram like:
 
           <MERMAID>
@@ -77,12 +81,13 @@ jobs:
             Sender --> CPI
             CPI --> Receiver
           </MERMAID>
-          EOF
-
+           EOF
+           
           echo "🔍 Searching for iFlows inside $BASE_PKG_DIR ..."
 
-          # find all iFlow definitions
+          # Find all iFlow roots
           IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.iflw" \))
+
           if [ -z "$IFLOW_PATHS" ]; then
             echo "::warning::No iFlows found."
             echo "docs_generated=false" >> $GITHUB_OUTPUT
@@ -93,10 +98,12 @@ jobs:
 
           ALL_DOCS=false
 
+
           # -------------------------
           # PROCESS EACH IFLOW
           # -------------------------
           for ROOT in $ROOT_FOLDERS; do
+
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME=$(basename "$IFLOW_DIR")
 
@@ -106,21 +113,25 @@ jobs:
 
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            # Collect ALL artifacts content
+
+            # Collect artifacts
             ARTIFACT_DATA=""
-            FILE_LIST=$(find "$IFLOW_DIR" -type f \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
+            FILE_LIST=$(find "$IFLOW_DIR" -type f \
+                \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
 
             for FILE in $FILE_LIST; do
               CONTENT=$(cat "$FILE")
               ARTIFACT_DATA="${ARTIFACT_DATA}\n\n--- FILE: $FILE ---\n${CONTENT}\n--- END FILE ---\n"
             done
 
-            # Build user query
-            USER_QUERY=$(printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" "$IFLOW_NAME" "$ARTIFACT_DATA")
-            echo "$USER_QUERY" > "$QUERY_FILE"
+
+            # Build query file
+            printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" \
+              "$IFLOW_NAME" "$ARTIFACT_DATA" > "$QUERY_FILE"
+
 
             # -------------------------
-            # BUILD OPENAI PAYLOAD USING --rawfile (NO SIZE LIMIT)
+            # BUILD OPENAI PAYLOAD (NO LENGTH LIMIT)
             # -------------------------
             PAYLOAD=$(jq -n \
               --arg system "$SYSTEM_PROMPT" \
@@ -129,14 +140,15 @@ jobs:
               '{
                 model: $model,
                 messages: [
-                  {role:"system", content:$system},
-                  {role:"user", content:$query}
+                  { role: "system", content: $system },
+                  { role: "user", content: $query }
                 ],
                 temperature: 0.1
               }')
 
+
             # -------------------------
-            # CALL OPENAI API
+            # CALL OPENAI
             # -------------------------
             RESPONSE=$(curl -s -X POST "$API_URL" \
                 -H "Content-Type: application/json" \
@@ -146,24 +158,28 @@ jobs:
             echo "🔍 RAW API RESPONSE:"
             echo "$RESPONSE"
 
+
             ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty')
             if [ -n "$ERROR_MSG" ]; then
-              echo "❌ OpenAI API Error: $ERROR_MSG"
+              echo "❌ OpenAI Error: $ERROR_MSG"
               continue
             fi
 
             GENERATED_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
             if [ -z "$GENERATED_TEXT" ]; then
-              echo "❌ No documentation returned for $IFLOW_NAME"
+              echo "❌ Empty response for $IFLOW_NAME"
               continue
             fi
 
+
+            # Save Markdown
             echo "$GENERATED_TEXT" > "$MD_TEMP"
 
             echo "📄 Converting to DOCX..."
             pandoc "$MD_TEMP" -o "$FINAL_DOC"
 
-            echo "🧹 Cleaning up temporary files..."
+            echo "🧹 Cleaning temp files..."
             rm "$MD_TEMP" "$QUERY_FILE"
 
             echo "✅ Saved DOCX: $FINAL_DOC"
@@ -174,8 +190,10 @@ jobs:
 
           echo "docs_generated=$ALL_DOCS" >> $GITHUB_OUTPUT
 
+
+
       # -------------------------
-      # COMMIT GENERATED DOCX
+      # COMMIT DOCX FILES
       # -------------------------
       - name: Commit Generated DOCX Files
         if: steps.documentation_step.outputs.docs_generated == 'true'
@@ -189,13 +207,14 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No changes to commit."
-          else
-            echo "📥 Pulling latest changes..."
-            git pull --rebase origin main
-
-            echo "📝 Committing..."
-            git commit -m "🤖 Generated iFlow DOCX documentation for package: $PKG_ID"
-
-            echo "🚀 Pushing..."
-            git push origin main
+            exit 0
           fi
+
+          echo "📥 Pulling latest changes..."
+          git pull --rebase origin main
+
+          echo "📝 Committing..."
+          git commit -m "🤖 Generated iFlow DOCX documentation for package: $PKG_ID"
+
+          echo "🚀 Pushing..."
+          git push origin main
