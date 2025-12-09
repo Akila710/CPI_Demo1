@@ -1,1 +1,179 @@
+name: 🤖 Generate Individual iFlow Documentation (Groq)
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_id:
+        description: "The ID of the CPI Integration Package (e.g., 'MyPackage')."
+        required: true
+        type: string
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install jq & unzip
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq unzip
+
+      - name: Generate Individual iFlow Documentation via Groq API
+        id: documentation_step
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PKG_ID: ${{ github.event.inputs.package_id }}
+        run: |
+          set -e
+
+          # --- Configuration ---
+          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
+          MODEL_NAME="llama-3.3-70b-versatile"
+
+          BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+
+          if [ ! -d "$BASE_PKG_DIR" ]; then
+            echo "::error:: Package not found: $BASE_PKG_DIR"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+          echo "📦 Starting Groq-based documentation for package: $PKG_ID"
+
+          # --- SYSTEM PROMPT ---
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Analyze the provided CPI iFlow files and produce a complete Markdown documentation report.
+
+          Mandatory 10 Sections:
+          1. High-level architecture
+          2. Purpose of this iFlow
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow explanation
+          6. Mapping logic summary (XSLT, JSON, XML)
+          7. Groovy script explanations
+          8. Error handling
+          9. Security/authentication mechanisms
+          10. High-Level Process Diagram (Mermaid 'graph TD')"
+
+          # --- Find all iFlow files ---
+          FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name '*.iflw' -o -name 'iFlowContent.xml' \))
+
+          if [ -z "$FULL_IFLOW_PATHS" ]; then
+            echo "::warning:: No iFlows found in $PKG_ID"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Extract top-level iFlow folder names
+          IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
+
+          ALL_DOCS_GENERATED=false
+
+          for ROOT in $IFLOW_ROOTS; do
+
+            IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
+            IFLOW_NAME="$ROOT"
+            OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
+
+            echo "=================================================="
+            echo "➡ Processing iFlow: $IFLOW_NAME"
+            echo "Directory: $IFLOW_DIR"
+
+            FILES_TO_ANALYZE=$(find "$IFLOW_DIR" -type f \
+              \( -name '*.iflw' -o -name '*.xml' -o -name '*.groovy' -o -name '*.json' -o -name '*.xslt' \))
+
+            if [ -z "$FILES_TO_ANALYZE" ]; then
+              echo "⚠ No artifacts found in $IFLOW_NAME — skipping"
+              continue
+            fi
+
+            CONTENT=""
+            for FILE in $FILES_TO_ANALYZE; do
+              echo "📄 Reading: $FILE"
+              TEXT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
+              CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
+            done
+
+            USER_QUERY="Generate documentation for the iFlow '$IFLOW_NAME'. Use Markdown headings and produce the 10 required sections.
+
+            \`\`\`text
+            $CONTENT
+            \`\`\`
+            "
+
+            # --- Build Groq API payload ---
+            PAYLOAD=$(jq -n \
+              --arg model "$MODEL_NAME" \
+              --arg sys "$SYSTEM_PROMPT" \
+              --arg usr "$USER_QUERY" \
+              '{
+                model: $model,
+                messages: [
+                  { "role": "system", "content": $sys },
+                  { "role": "user", "content": $usr }
+                ],
+                temperature: 0.1
+              }')
+
+            # --- API Retry Logic ---
+            MAX_RETRIES=3
+            RETRY=0
+            SUCCESS=false
+
+            while [ $RETRY -lt $MAX_RETRIES ]; do
+
+              RESPONSE=$(curl -s -X POST "$GROQ_URL" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+                -d "$PAYLOAD")
+
+              SUMMARY=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
+
+              if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
+                echo "✅ Documentation generated for $IFLOW_NAME"
+                echo "$SUMMARY" > "$OUTPUT_FILE"
+                SUCCESS=true
+                ALL_DOCS_GENERATED=true
+                break
+              fi
+
+              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
+              RETRY=$((RETRY + 1))
+              WAIT=$((2 ** RETRY))
+
+              echo "⚠️ Groq API failed: $ERROR_MSG — retrying in $WAIT sec ($RETRY/$MAX_RETRIES)"
+              sleep $WAIT
+            done
+
+            if [ "$SUCCESS" = false ]; then
+              echo "❌ Failed to generate documentation for $IFLOW_NAME"
+            fi
+
+            echo "=================================================="
+
+          done
+
+          echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
+
+      - name: Commit All Generated iFlow Documents
+        if: steps.documentation_step.outputs.docs_generated == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          PKG_ID="${{ github.event.inputs.package_id }}"
+          git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.md || true
+
+          if git diff --cached --quiet; then
+            echo "ℹ No documentation changes to commit."
+            exit 0
+          fi
+
+          git commit -m "🤖 Groq: Auto-generated iFlow documentation for package: $PKG_ID"
+          git push
+
+          echo "🚀 Documentation committed successfully."
 
