@@ -1,76 +1,72 @@
-name: "🤖 Generate iFlow-wise Documentation (GROQ)"
+name: 🤖 Generate Individual iFlow Documentation (Groq)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI package folder under cpi-artifacts"
+        description: "CPI package folder inside cpi-artifacts"
         required: true
         type: string
 
 jobs:
-  generate:
+  document:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install utilities
+      - name: Install jq & unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y jq unzip
 
-      - name: Generate iFlow documentation via GROQ API
+      - name: Generate iFlow Documentation using Groq
+        id: documentation_step
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
           set -e
 
-          # ---------------------------
-          # CONFIG
-          # ---------------------------
+          # -------------------------
+          # CONFIGURATION
+          # -------------------------
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="mixtral-8x7b-32768"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          echo "🔑 GROQ Key Length: ${#GROQ_API_KEY}"
-
-          if [ ${#GROQ_API_KEY} -lt 10 ]; then
-            echo "::error:: Your GROQ_API_KEY is missing or invalid"
-            exit 1
-          fi
+          echo "🔑 Groq Key Length: ${#GROQ_API_KEY}"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error:: Package folder not found: $BASE_PKG_DIR"
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "📦 Processing Package: $PKG_ID"
+          echo "📦 Processing package: $PKG_ID"
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Generate a professional Markdown document explaining the iFlow.
-
-          Mandatory Sections:
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Generate a detailed Markdown iFlow document with the following required sections:
           1. High-level architecture
-          2. Purpose
+          2. Purpose of the iFlow
           3. Sender/Receiver systems
           4. Adapter types used
           5. Step-by-step flow explanation
-          6. Mapping logic summary
-          7. Groovy script explanations
+          6. Mapping logic summary (XML/JSON/XSLT)
+          7. Groovy script logic explanation
           8. Error handling
           9. Security/authentication
-          10. High-Level Mermaid Diagram (graph TD)
+          10. High-Level Architecture Diagram (Mermaid graph TD)
           "
 
-          # ---------------------------
-          # Find iFlow roots
-          # ---------------------------
+          # -------------------------
+          # FIND IFLOW ROOT DIRECTORIES
+          # -------------------------
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlow files found."
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -78,9 +74,9 @@ jobs:
 
           ALL_DOCS_GENERATED=false
 
-          # ---------------------------
-          # LOOP OVER EACH IFLOW
-          # ---------------------------
+          # -------------------------
+          # PROCESS EACH IFLOW
+          # -------------------------
           for ROOT in $IFLOW_ROOTS; do
 
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
@@ -90,12 +86,13 @@ jobs:
             echo "=================================================="
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            # Gather files (.iflw, XML, groovy, xslt, json)
+            # Collect all readable artifacts
             FILES=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.json" -o -name "*.xslt" \))
+              \( -name "*.iflw" -o -name "*.xml" -o -name "*.json" \
+                 -name "*.groovy" -o -name "*.xslt" \))
 
             if [ -z "$FILES" ]; then
-              echo "⚠ No readable files inside: $IFLOW_NAME"
+              echo "⚠ No readable artifacts found in: $IFLOW_NAME"
               continue
             fi
 
@@ -106,13 +103,13 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for the iFlow '$IFLOW_NAME'.
-
+            USER_PROMPT="Generate full documentation for the iFlow '$IFLOW_NAME':
             \`\`\`text
             $CONTENT
             \`\`\`
             "
 
+            # Build Groq JSON payload
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -120,15 +117,15 @@ jobs:
               '{
                 model: $model,
                 messages: [
-                  { "role": "system", "content": $sys },
-                  { "role": "user", "content": $usr }
+                  {"role": "system", "content": $sys},
+                  {"role": "user", "content": $usr}
                 ],
                 temperature: 0.1
               }')
 
-            # ---------------------------
-            # GROQ API RETRY LOOP
-            # ---------------------------
+            # -------------------------
+            # GROQ API RETRY
+            # -------------------------
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
@@ -140,15 +137,9 @@ jobs:
                 -H "Authorization: Bearer $GROQ_API_KEY" \
                 -d "$PAYLOAD")
 
-              # Debug log first time
-              if [ $RETRY -eq 0 ]; then
-                echo "🔍 Raw Groq Response:"
-                echo "$RESPONSE"
-              fi
+              SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-              SUMMARY=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
-
-              if [ "$SUMMARY" != "null" ] && [ -n "$SUMMARY" ]; then
+              if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
                 echo "✅ Documentation generated for $IFLOW_NAME"
                 echo "$SUMMARY" > "$OUTPUT_FILE"
                 SUCCESS=true
@@ -158,37 +149,38 @@ jobs:
 
               ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
 
-              echo "⚠️ Groq API Error: $ERROR_MSG"
+              echo "⚠️ Groq Error: $ERROR_MSG"
 
               RETRY=$((RETRY + 1))
               WAIT=$((2 ** RETRY))
 
-              echo "🔁 Retry in $WAIT seconds ($RETRY/$MAX_RETRIES)"
+              echo "🔁 Retrying in $WAIT seconds ($RETRY/$MAX_RETRIES)"
               sleep $WAIT
             done
 
             if [ "$SUCCESS" = false ]; then
-              echo "❌ Failed to generate documentation for $IFLOW_NAME"
+              echo "❌ Failed to generate documentation for: $IFLOW_NAME"
             fi
 
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
 
-      - name: Commit iFlow Summaries
-        if: steps.generate.outputs.docs_generated == 'true'
+      - name: Commit Generated Documentation
+        if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          git add cpi-artifacts/**/iFlow_Summary.md || true
+          PKG_ID="${{ github.event.inputs.package_id }}"
+          git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
-            echo "ℹ No updates to commit."
+            echo "ℹ No changes to commit."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated iFlow documentation (Groq)"
+          git commit -m "🤖 Auto-generated iFlow documentation using Groq"
           git push
 
           echo "🚀 Documentation committed successfully."
