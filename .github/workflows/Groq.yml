@@ -1,15 +1,15 @@
-name: 🤖 Generate Individual iFlow Documentation (Groq)
+name: 🤖 Generate iFlow Documentation (Groq Mixtral)
 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "The ID of the CPI Integration Package (e.g., 'MyPackage')."
+        description: "CPI Package folder under cpi-artifacts"
         required: true
         type: string
 
 jobs:
-  document:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,7 +21,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq unzip
 
-      - name: Generate Individual iFlow Documentation via Groq API
+      - name: Generate iFlow documentation using Groq Mixtral
         id: documentation_step
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -29,9 +29,8 @@ jobs:
         run: |
           set -e
 
-          # --- Configuration ---
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="llama-3.3-70b-versatile"
+          MODEL_NAME="mixtral-8x7b-32768"
 
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
@@ -41,9 +40,8 @@ jobs:
             exit 1
           fi
 
-          echo "📦 Starting Groq-based documentation for package: $PKG_ID"
+          echo "📦 Starting documentation for package: $PKG_ID"
 
-          # --- SYSTEM PROMPT ---
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Analyze the provided CPI iFlow files and produce a complete Markdown documentation report.
 
           Mandatory 10 Sections:
@@ -56,10 +54,10 @@ jobs:
           7. Groovy script explanations
           8. Error handling
           9. Security/authentication mechanisms
-          10. High-Level Process Diagram (Mermaid 'graph TD')"
+          10. High-Level Process Diagram (Mermaid graph TD style)
+          "
 
-          # --- Find all iFlow files ---
-          FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name '*.iflw' -o -name 'iFlowContent.xml' \))
+          FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlows found in $PKG_ID"
@@ -67,7 +65,6 @@ jobs:
             exit 0
           fi
 
-          # Extract top-level iFlow folder names
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
 
           ALL_DOCS_GENERATED=false
@@ -80,10 +77,9 @@ jobs:
 
             echo "=================================================="
             echo "➡ Processing iFlow: $IFLOW_NAME"
-            echo "Directory: $IFLOW_DIR"
 
             FILES_TO_ANALYZE=$(find "$IFLOW_DIR" -type f \
-              \( -name '*.iflw' -o -name '*.xml' -o -name '*.groovy' -o -name '*.json' -o -name '*.xslt' \))
+              \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.json" -o -name "*.xslt" \))
 
             if [ -z "$FILES_TO_ANALYZE" ]; then
               echo "⚠ No artifacts found in $IFLOW_NAME — skipping"
@@ -104,7 +100,6 @@ jobs:
             \`\`\`
             "
 
-            # --- Build Groq API payload ---
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -118,7 +113,6 @@ jobs:
                 temperature: 0.1
               }')
 
-            # --- API Retry Logic ---
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
@@ -158,22 +152,19 @@ jobs:
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
 
-      - name: Commit All Generated iFlow Documents
+      - name: Commit all generated documentation
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
           PKG_ID="${{ github.event.inputs.package_id }}"
-          git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.md || true
+          git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
-            echo "ℹ No documentation changes to commit."
-            exit 0
+            echo "No changes to commit."
+          else
+            git commit -m "🤖 Auto-generated iFlow documentation using Groq Mixtral"
+            git push
+            echo "🚀 Documentation committed."
           fi
-
-          git commit -m "🤖 Groq: Auto-generated iFlow documentation for package: $PKG_ID"
-          git push
-
-          echo "🚀 Documentation committed successfully."
-
