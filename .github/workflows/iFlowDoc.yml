@@ -93,7 +93,8 @@ jobs:
             USER_PROMPT="
             Generate detailed SAP CPI iFlow documentation.
 
-        Required sections:
+            Required sections:
+         
             1. Purpose  
             2. Sender & Receiver systems  
             3. Adapter types used  
@@ -103,14 +104,16 @@ jobs:
             7. Error handling mechanisms  
             8. Security  
             9. Additional notes  
-            
-        Analyze the iFlow contents below :
+                     
+            Analyze the iFlow contents below:
             
              \`\`\`text
              $CONTENT
-             \`\`\`"
+             \`\`\`
+             "
             
             # STEP 5 – Build request
+            
             PAYLOAD=$(jq -n \
               --arg model "$MODEL" \
               --arg sys "You are a senior SAP CPI Integration Architect." \
