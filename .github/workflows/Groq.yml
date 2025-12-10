@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI package folder inside cpi-artifacts"
+        description: "CPI Package folder inside cpi-artifacts"
         required: true
         type: string
 
@@ -29,14 +29,14 @@ jobs:
         run: |
           set -e
 
-          # -------------------------
-          # CONFIGURATION
-          # -------------------------
+          ###########################
+          # CONFIG
+          ###########################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="mixtral-8x7b-32768"
+          MODEL_NAME="llama-3.1-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          echo "🔑 Groq Key Length: ${#GROQ_API_KEY}"
+          echo "🔑 GROQ Key Length: ${#GROQ_API_KEY}"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error:: Package folder not found: $BASE_PKG_DIR"
@@ -46,22 +46,28 @@ jobs:
 
           echo "📦 Processing package: $PKG_ID"
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Generate a detailed Markdown iFlow document with the following required sections:
-          1. High-level architecture
-          2. Purpose of the iFlow
-          3. Sender/Receiver systems
-          4. Adapter types used
-          5. Step-by-step flow explanation
-          6. Mapping logic summary (XML/JSON/XSLT)
-          7. Groovy script logic explanation
-          8. Error handling
-          9. Security/authentication
-          10. High-Level Architecture Diagram (Mermaid graph TD)
+          ###########################
+          # SYSTEM PROMPT
+          ###########################
+          SYSTEM_PROMPT="You are a senior SAP CPI Integration Architect.  
+          Generate a detailed Markdown documentation for the provided iFlow.  
+
+          Mandatory sections:
+          1. High-level architecture  
+          2. Purpose of this iFlow  
+          3. Sender/Receiver systems  
+          4. Adapter types used  
+          5. Step-by-step flow explanation  
+          6. Mapping logic summary (XML/JSON/XSLT)  
+          7. Groovy script explanations  
+          8. Error handling  
+          9. Security/authentication  
+          10. High-Level Architecture Diagram (Mermaid graph TD)  
           "
 
-          # -------------------------
-          # FIND IFLOW ROOT DIRECTORIES
-          # -------------------------
+          ###########################
+          # FIND iFLOW ROOT FOLDERS
+          ###########################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
@@ -74,9 +80,9 @@ jobs:
 
           ALL_DOCS_GENERATED=false
 
-          # -------------------------
+          ###########################
           # PROCESS EACH IFLOW
-          # -------------------------
+          ###########################
           for ROOT in $IFLOW_ROOTS; do
 
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
@@ -86,7 +92,7 @@ jobs:
             echo "=================================================="
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            # Collect all readable artifacts
+            # Collect all readable file types
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.iflw" -o -name "*.xml" -o -name "*.json" \
                  -name "*.groovy" -o -name "*.xslt" \))
@@ -96,20 +102,31 @@ jobs:
               continue
             fi
 
+            ###########################
+            # BUILD CONTENT
+            ###########################
             CONTENT=""
+
             for FILE in $FILES; do
               echo "📄 Reading: $FILE"
               TEXT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
-              CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
+              ESCAPED_TEXT=$(printf '%s\n' "$TEXT" | sed 's/`/\\`/g')
+              CONTENT+="\n--- START FILE: $FILE ---\n$ESCAPED_TEXT\n--- END FILE: $FILE ---\n"
             done
 
+            ###########################
+            # USER PROMPT
+            ###########################
             USER_PROMPT="Generate full documentation for the iFlow '$IFLOW_NAME':
+
             \`\`\`text
             $CONTENT
             \`\`\`
             "
 
-            # Build Groq JSON payload
+            ###########################
+            # BUILD JSON PAYLOAD
+            ###########################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -123,9 +140,9 @@ jobs:
                 temperature: 0.1
               }')
 
-            # -------------------------
-            # GROQ API RETRY
-            # -------------------------
+            ###########################
+            # CALL GROQ WITH RETRY
+            ###########################
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
@@ -148,7 +165,6 @@ jobs:
               fi
 
               ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-
               echo "⚠️ Groq Error: $ERROR_MSG"
 
               RETRY=$((RETRY + 1))
@@ -166,6 +182,7 @@ jobs:
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
 
+
       - name: Commit Generated Documentation
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
@@ -173,6 +190,7 @@ jobs:
           git config user.email "actions@github.com"
 
           PKG_ID="${{ github.event.inputs.package_id }}"
+
           git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
@@ -182,5 +200,4 @@ jobs:
 
           git commit -m "🤖 Auto-generated iFlow documentation using Groq"
           git push
-
           echo "🚀 Documentation committed successfully."
