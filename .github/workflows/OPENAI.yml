@@ -33,7 +33,7 @@ jobs:
       # -------------------------
       # GENERATE DOCX DOCUMENTATION
       # -------------------------
-          - name: Generate Individual iFlow Documentation via OpenAI API
+      - name: Generate Individual iFlow Documentation via OpenAI API
         id: documentation_step
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
