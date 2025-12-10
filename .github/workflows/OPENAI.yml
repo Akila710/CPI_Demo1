@@ -13,48 +13,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+    # ------------------------------------------------------
+    # CHECKOUT REPOSITORY
+    # ------------------------------------------------------
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      # -------------------------
-      # CHECKOUT
-      # -------------------------
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+    # ------------------------------------------------------
+    # INSTALL DEPENDENCIES
+    # ------------------------------------------------------
+    - name: Install jq + pandoc
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq pandoc
 
-      # -------------------------
-      # INSTALL DEPENDENCIES
-      # -------------------------
-      - name: Install jq + pandoc + latex
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq pandoc texlive texlive-latex-extra
-
-      # -------------------------
-      # GENERATE DOCX DOCUMENTATION
-      # -------------------------
-      - name: Generate Individual iFlow Documentation via OpenAI API
-        id: documentation_step
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          PKG_ID: ${{ github.event.inputs.package_id }}
-        run: |
-          set -e
-
-          API_URL="https://api.openai.com/v1/chat/completions"
-          MODEL_NAME="gpt-4o-mini"
-          BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
-
-          if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error::Package folder not found: $BASE_PKG_DIR"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-
-          # ----------------------------------------------------
-          # HEREDOC FIX — WE EXIT YAML INDENTATION USING cat << 'EOF'
-          # ----------------------------------------------------
-          cat << 'EOF' > system_prompt.txt
+    # ------------------------------------------------------
+    # CREATE SYSTEM PROMPT FILE (SAFE HEREDOC)
+    # ------------------------------------------------------
+    - name: Create system prompt file
+      run: |
+        cat << 'EOF' > system_prompt.txt
 You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
 1. High-level architecture
@@ -79,97 +59,116 @@ Instead wrap the diagram like:
 </MERMAID>
 EOF
 
+    # ------------------------------------------------------
+    # GENERATE DOCUMENTATION
+    # ------------------------------------------------------
+    - name: Generate iFlow Documentation via OpenAI
+      id: documentation_step
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        PKG_ID: ${{ github.event.inputs.package_id }}
 
-          echo "🔍 Searching for iFlows in $BASE_PKG_DIR..."
+      run: |
+        set -e
 
-          IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.iflw" \))
+        API_URL="https://api.openai.com/v1/chat/completions"
+        MODEL_NAME="gpt-4o-mini"
+        BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          if [ -z "$IFLOW_PATHS" ]; then
-            echo "::warning::No iFlows found."
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+        if [ ! -d "$BASE_PKG_DIR" ]; then
+          echo "::error::Package folder not found: $BASE_PKG_DIR"
+          echo "docs_generated=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
 
-          ROOT_FOLDERS=$(echo "$IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
+        SYSTEM_PROMPT="$(cat system_prompt.txt)"
 
-          ALL_DOCS=false
+        echo "🔍 Searching for iFlows inside $BASE_PKG_DIR ..."
 
-          for ROOT in $ROOT_FOLDERS; do
+        # Find all iFlow definitions
+        IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "iFlowContent.xml" -o -name "*.iflw" \))
 
-            IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
-            IFLOW_NAME=$(basename "$IFLOW_DIR")
+        if [ -z "$IFLOW_PATHS" ]; then
+          echo "::warning::No iFlows found."
+          echo "docs_generated=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
 
-            MD_TEMP="$IFLOW_DIR/iFlow_Summary.md"
-            FINAL_DOC="$IFLOW_DIR/iFlow_Summary.docx"
-            QUERY_FILE="$IFLOW_DIR/query.txt"
+        ROOT_FOLDERS=$(echo "$IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
 
-            echo "➡ Processing iFlow: $IFLOW_NAME"
+        ALL_DOCS=false
 
-            ARTIFACT_DATA=""
-            FILE_LIST=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
+        for ROOT in $ROOT_FOLDERS; do
+          IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
+          IFLOW_NAME=$(basename "$IFLOW_DIR")
 
-            for FILE in $FILE_LIST; do
-              CONTENT=$(cat "$FILE")
-              ARTIFACT_DATA="${ARTIFACT_DATA}\n\n--- FILE: $FILE ---\n${CONTENT}\n--- END FILE ---\n"
-            done
+          MD_FILE="$IFLOW_DIR/iFlow_Summary.md"
+          QUERY_FILE="$IFLOW_DIR/query.txt"
 
-            printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" \
-              "$IFLOW_NAME" "$ARTIFACT_DATA" > "$QUERY_FILE"
+          echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            PAYLOAD=$(jq -n \
-              --arg system "$SYSTEM_PROMPT" \
-              --rawfile query "$QUERY_FILE" \
-              --arg model "$MODEL_NAME" \
-              '{
-                model: $model,
-                messages: [
-                  { role: "system", content: $system },
-                  { role: "user", content: $query }
-                ],
-                temperature: 0.1
-              }')
+          # Collect artifacts
+          ARTIFACT_DATA=""
+          FILE_LIST=$(find "$IFLOW_DIR" -type f \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
 
-            RESPONSE=$(curl -s -X POST "$API_URL" \
-                -H "Content-Type: application/json" \
-                -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
-                -d "$PAYLOAD")
-
-            GENERATED_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
-
-            if [ -z "$GENERATED_TEXT" ]; then
-              echo "❌ No documentation returned for $IFLOW_NAME"
-              continue
-            fi
-
-            echo "$GENERATED_TEXT" > "$MD_TEMP"
-            pandoc "$MD_TEMP" -o "$FINAL_DOC"
-            rm "$MD_TEMP" "$QUERY_FILE"
-
-            echo "✅ Saved DOCX: $FINAL_DOC"
-            ALL_DOCS=true
-
+          for FILE in $FILE_LIST; do
+            ARTIFACT_DATA="${ARTIFACT_DATA}\n\n--- FILE: $FILE ---\n$(cat "$FILE")\n--- END FILE ---\n"
           done
 
-          echo "docs_generated=$ALL_DOCS" >> $GITHUB_OUTPUT
+          printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" "$IFLOW_NAME" "$ARTIFACT_DATA" > "$QUERY_FILE"
 
-      # -------------------------
-      # COMMIT DOCX FILES
-      # -------------------------
-      - name: Commit Generated DOCX Files
-        if: steps.documentation_step.outputs.docs_generated == 'true'
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
+          PAYLOAD=$(jq -n \
+            --arg system "$SYSTEM_PROMPT" \
+            --rawfile query "$QUERY_FILE" \
+            --arg model "$MODEL_NAME" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $query}
+              ],
+              temperature: 0.1
+            }')
 
-          PKG_ID="${{ github.event.inputs.package_id }}"
-          git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.docx
+          RESPONSE=$(curl -s -X POST "$API_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer '"$OPENAI_API_KEY"'" \
+            -d "$PAYLOAD")
 
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+          GENERATED_TEXT=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
+
+          if [ -z "$GENERATED_TEXT" ] || [ "$GENERATED_TEXT" = "null" ]; then
+            echo "❌ No documentation generated for $IFLOW_NAME"
+            continue
           fi
 
-          git pull --rebase origin main
-          git commit -m "🤖 Generated iFlow DOCX documentation for package: $PKG_ID"
-          git push origin main
+          echo "$GENERATED_TEXT" > "$MD_FILE"
+          echo "✅ Saved: $MD_FILE"
+
+          ALL_DOCS=true
+
+          rm "$QUERY_FILE"
+        done
+
+        echo "docs_generated=$ALL_DOCS" >> $GITHUB_OUTPUT
+
+    # ------------------------------------------------------
+    # AUTO-COMMIT GENERATED FILES
+    # ------------------------------------------------------
+    - name: Commit generated documentation
+      if: steps.documentation_step.outputs.docs_generated == 'true'
+      run: |
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+
+        PKG_ID="${{ github.event.inputs.package_id }}"
+
+        git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.md
+
+        if git diff --cached --quiet; then
+          echo "No new documentation created."
+          exit 0
+        fi
+
+        git commit -m "🤖 DOCS: Generated iFlow documentation for package: $PKG_ID"
+        git push
