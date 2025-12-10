@@ -33,7 +33,7 @@ jobs:
       # -------------------------
       # GENERATE DOCX DOCUMENTATION
       # -------------------------
-      - name: Generate iFlow Documentation
+          - name: Generate Individual iFlow Documentation via OpenAI API
         id: documentation_step
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -51,8 +51,10 @@ jobs:
             exit 1
           fi
 
-          # HEREDOC MUST START AT COLUMN 1 — DO NOT INDENT
-read -r -d '' SYSTEM_PROMPT << 'EOF'
+          # ----------------------------------------------------
+          # HEREDOC FIX — WE EXIT YAML INDENTATION USING cat << 'EOF'
+          # ----------------------------------------------------
+          cat << 'EOF' > system_prompt.txt
 You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
 1. High-level architecture
@@ -76,6 +78,7 @@ Instead wrap the diagram like:
   CPI --> Receiver
 </MERMAID>
 EOF
+
 
           echo "🔍 Searching for iFlows in $BASE_PKG_DIR..."
 
