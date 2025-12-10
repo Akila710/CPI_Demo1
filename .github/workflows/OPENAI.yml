@@ -53,35 +53,32 @@ jobs:
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
+          
+read -r -d '' SYSTEM_PROMPT << 'EOF'
+You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
+1. High-level architecture
+2. Purpose of this iFlow
+3. Sender/Receiver systems
+4. Adapter types used
+5. Step-by-step flow explanation
+6. Mapping logic summary (XSLT, mappings)
+7. Groovy script explanation
+8. Error handling
+9. Security/authentication
+10. High-Level Process Flow Diagram (Mermaid)
 
-          # -------------------------
-          # SYSTEM PROMPT (NO INDENTATION)
-          # -------------------------
-          read -r -d '' SYSTEM_PROMPT << 'EOF'
-          You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
+IMPORTANT:
+DO NOT use triple backticks for Mermaid.
+Instead wrap the diagram like:
 
-          1. High-level architecture
-          2. Purpose of this iFlow
-          3. Sender/Receiver systems
-          4. Adapter types used
-          5. Step-by-step flow explanation
-          6. Mapping logic summary (XSLT, mappings)
-          7. Groovy script explanation
-          8. Error handling
-          9. Security/authentication
-          10. High-Level Process Flow Diagram (Mermaid)
+<MERMAID>
+  graph TD
+  Sender --> CPI
+  CPI --> Receiver
+</MERMAID>
+EOF
 
-          IMPORTANT:
-          DO NOT use triple backticks for Mermaid.
-          Instead wrap the diagram like:
-
-          <MERMAID>
-            graph TD
-            Sender --> CPI
-            CPI --> Receiver
-          </MERMAID>
-          EOF   
           echo "🔍 Searching for iFlows inside $BASE_PKG_DIR ..."
 
           # Find all iFlow roots
