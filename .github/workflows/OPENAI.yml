@@ -15,12 +15,12 @@ jobs:
     steps:
 
       # -------------------------
-      # CHECKOUT (IMPORTANT)
+      # CHECKOUT
       # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # required for git pull --rebase
+          fetch-depth: 0   # required for rebase pull
 
       # -------------------------
       # INSTALL DEPENDENCIES
@@ -53,8 +53,11 @@ jobs:
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
-          
-read -r -d '' SYSTEM_PROMPT << 'EOF'
+
+          # ------------------------------------------
+          # SAFE HEREDOC (NO INDENT INSIDE EOF)
+          # ------------------------------------------
+          read -r -d '' SYSTEM_PROMPT << 'EOF'
 You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
 1. High-level architecture
@@ -94,7 +97,6 @@ EOF
 
           ALL_DOCS=false
 
-
           # -------------------------
           # PROCESS EACH IFLOW
           # -------------------------
@@ -109,8 +111,7 @@ EOF
 
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-
-            # Collect artifacts
+            # Collect all artifacts (groovy, xslt, xml, iflw)
             ARTIFACT_DATA=""
             FILE_LIST=$(find "$IFLOW_DIR" -type f \
                 \( -name "*.groovy" -o -name "*.xslt" -o -name "*.iflw" -o -name "iFlowContent.xml" \))
@@ -120,15 +121,11 @@ EOF
               ARTIFACT_DATA="${ARTIFACT_DATA}\n\n--- FILE: $FILE ---\n${CONTENT}\n--- END FILE ---\n"
             done
 
-
-            # Build query file
+            # Build user query
             printf "Generate documentation for iFlow '%s'.\nArtifacts:\n%s" \
               "$IFLOW_NAME" "$ARTIFACT_DATA" > "$QUERY_FILE"
 
-
-            # -------------------------
-            # BUILD OPENAI PAYLOAD (NO LENGTH LIMIT)
-            # -------------------------
+            # BUILD OPENAI PAYLOAD (NO LENGTH LIMIT via rawfile)
             PAYLOAD=$(jq -n \
               --arg system "$SYSTEM_PROMPT" \
               --rawfile query "$QUERY_FILE" \
@@ -142,7 +139,6 @@ EOF
                 temperature: 0.1
               }')
 
-
             # -------------------------
             # CALL OPENAI
             # -------------------------
@@ -153,7 +149,6 @@ EOF
 
             echo "🔍 RAW API RESPONSE:"
             echo "$RESPONSE"
-
 
             ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // empty')
             if [ -n "$ERROR_MSG" ]; then
@@ -167,7 +162,6 @@ EOF
               echo "❌ Empty response for $IFLOW_NAME"
               continue
             fi
-
 
             # Save Markdown
             echo "$GENERATED_TEXT" > "$MD_TEMP"
@@ -187,9 +181,8 @@ EOF
           echo "docs_generated=$ALL_DOCS" >> $GITHUB_OUTPUT
 
 
-
       # -------------------------
-      # COMMIT DOCX FILES
+      # COMMIT THE DOCX FILES
       # -------------------------
       - name: Commit Generated DOCX Files
         if: steps.documentation_step.outputs.docs_generated == 'true'
@@ -202,7 +195,7 @@ EOF
           git add cpi-artifacts/$PKG_ID/**/iFlow_Summary.docx
 
           if git diff --cached --quiet; then
-            echo "No changes to commit."
+            echo "No new changes to commit."
             exit 0
           fi
 
