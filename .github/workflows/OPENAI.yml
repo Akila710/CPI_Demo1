@@ -57,7 +57,7 @@ jobs:
           # ------------------------------------------
           # SAFE HEREDOC (NO INDENT INSIDE EOF)
           # ------------------------------------------
-          read -r -d '' SYSTEM_PROMPT << 'EOF'
+read -r -d '' SYSTEM_PROMPT << 'EOF'
 You are a senior SAP CPI Technical Architect. Analyze all provided iFlow artifacts and generate a structured Markdown documentation with EXACTLY these 10 sections:
 
 1. High-level architecture
