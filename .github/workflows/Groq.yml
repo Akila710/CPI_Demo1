@@ -29,12 +29,14 @@ jobs:
         run: |
           set -e
 
-          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="openai/gpt-oss-120b"
-          
+          # -------------------------
+          # CONFIGURATION
+          # -------------------------
+          GROQ_URL="https://api.groq.com/v1/chat/completions"
+          MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          echo "🔑 Groq Key Length: ${#GROQ_API_KEY}"
+          echo "🔑 Groq API Key Length: ${#GROQ_API_KEY}"
           echo "📦 Processing package: $PKG_ID"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
@@ -43,7 +45,8 @@ jobs:
             exit 1
           fi
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create a complete technical Markdown document for this iFlow including:
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. 
+          Create a complete Markdown documentation for this CPI iFlow including:
           1. High-level architecture
           2. Purpose
           3. Sender/Receiver systems
@@ -56,6 +59,9 @@ jobs:
           10. High-Level Mermaid Diagram (graph TD)
           "
 
+          # -------------------------
+          # FIND IFLOW DIRECTORIES
+          # -------------------------
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
@@ -65,10 +71,13 @@ jobs:
           fi
 
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-
           ALL_DOCS_GENERATED=false
 
+          # -------------------------
+          # PROCESS EACH IFLOW
+          # -------------------------
           for ROOT in $IFLOW_ROOTS; do
+
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME="$ROOT"
             OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
@@ -87,16 +96,18 @@ jobs:
 
             CONTENT=""
             for FILE in $FILES; do
+              echo "📄 Reading: $FILE"
               TEXT=$(cat "$FILE" || echo "[Unreadable file]")
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for the iFlow '$IFLOW_NAME':
+            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME':
             \`\`\`text
             $CONTENT
             \`\`\`
             "
 
+            # BUILD PAYLOAD
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -110,14 +121,18 @@ jobs:
                 temperature: 0.15
               }')
 
+            # -------------------------
+            # GROQ API RETRY LOOP
+            # -------------------------
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
 
             while [ $RETRY -lt $MAX_RETRIES ]; do
+
               RESPONSE=$(curl -s -X POST "$GROQ_URL" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+                -H "Authorization: Bearer $GROQ_API_KEY" \
                 -d "$PAYLOAD")
 
               SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
@@ -140,6 +155,7 @@ jobs:
             if [ "$SUCCESS" = false ]; then
               echo "❌ Failed to generate documentation for: $IFLOW_NAME"
             fi
+
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
@@ -149,13 +165,14 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          PKG_ID="${{ github.event.inputs.package_id }}"
-          git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
+
+          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
             echo "ℹ No documentation changes to commit."
             exit 0
           fi
 
-          git commit -m "📘 Auto-generated iFlow documentation using Groq openai/gpt-oss-120b"
+          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B"
           git push
+          echo "🚀 Documentation committed successfully."
