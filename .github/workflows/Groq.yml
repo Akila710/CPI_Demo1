@@ -32,7 +32,7 @@ jobs:
           # -------------------------
           # CONFIGURATION
           # -------------------------
-          GROQ_URL="https://api.groq.com/v1/chat/completions"
+          GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
