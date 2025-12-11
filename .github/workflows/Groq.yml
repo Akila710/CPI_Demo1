@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI package folder inside cpi-artifacts"
+        description: "CPI package folder (inside cpi-artifacts)"
         required: true
         type: string
 
@@ -29,9 +29,9 @@ jobs:
         run: |
           set -e
 
-          # -------------------------
-          # CONFIGURATION
-          # -------------------------
+          ###############################################
+          # CONFIG
+          ###############################################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
@@ -45,23 +45,41 @@ jobs:
             exit 1
           fi
 
+          ###############################################
+          # STRICT SYSTEM PROMPT (FIXED MERMAID RULES)
+          ###############################################
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. 
           Create a complete Markdown documentation for this CPI iFlow including:
-          1. High-level architecture
-          2. Purpose
-          3. Sender/Receiver systems
-          4. Adapter types used
-          5. Step-by-step flow explanation
-          6. Mapping logic summary (XML/JSON/XSLT)
-          7. Groovy script logic explanation
-          8. Error handling
-          9. Security/authentication
+
+          1. High-level architecture  
+          2. Purpose  
+          3. Sender/Receiver systems  
+          4. Adapter types used  
+          5. Step-by-step flow explanation  
+          6. Mapping logic summary (XML/JSON/XSLT)  
+          7. Groovy script logic explanation  
+          8. Error handling  
+          9. Security/authentication  
           10. High-Level Mermaid Diagram (graph TD)
+
+          STRICT MERMAID RULES:
+          - Diagram MUST be inside a fenced code block: 
+            ```mermaid
+            graph TD
+            ...
+            ```
+          - Only use arrow syntax: --> or -->|Label|
+          - NEVER use '|Label|>' (INVALID)
+          - Never include '>' after labels
+          - Node syntax MUST be: A[Text], B[Text], C[Text]
+          - NO styling lines (no: style A ..., no fill:, no stroke:)
+          - Keep diagram high-level: Sender --> CPI --> Receiver (top-down)
+          - Diagram must render in GitHub without errors.
           "
 
-          # -------------------------
-          # FIND IFLOW DIRECTORIES
-          # -------------------------
+          ###############################################
+          # FIND IFLOW ROOTS
+          ###############################################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
@@ -71,11 +89,12 @@ jobs:
           fi
 
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
+
           ALL_DOCS_GENERATED=false
 
-          # -------------------------
+          ###############################################
           # PROCESS EACH IFLOW
-          # -------------------------
+          ###############################################
           for ROOT in $IFLOW_ROOTS; do
 
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
@@ -101,13 +120,17 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME':
+            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.  
+            Ensure the Mermaid diagram follows STRICT GitHub syntax.
+
             \`\`\`text
             $CONTENT
             \`\`\`
             "
 
+            ###############################################
             # BUILD PAYLOAD
+            ###############################################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -118,18 +141,17 @@ jobs:
                   {"role": "system", "content": $sys},
                   {"role": "user", "content": $usr}
                 ],
-                temperature: 0.15
+                temperature: 0.1
               }')
 
-            # -------------------------
-            # GROQ API RETRY LOOP
-            # -------------------------
+            ###############################################
+            # CALL GROQ WITH RETRIES
+            ###############################################
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
 
             while [ $RETRY -lt $MAX_RETRIES ]; do
-
               RESPONSE=$(curl -s -X POST "$GROQ_URL" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer $GROQ_API_KEY" \
@@ -145,8 +167,8 @@ jobs:
                 break
               fi
 
-              ERR=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-              echo "⚠️ Groq Error: $ERR"
+              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
+              echo "⚠️ Groq Error: $ERROR_MSG"
 
               RETRY=$((RETRY + 1))
               sleep $((2 ** RETRY))
@@ -155,7 +177,6 @@ jobs:
             if [ "$SUCCESS" = false ]; then
               echo "❌ Failed to generate documentation for: $IFLOW_NAME"
             fi
-
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
@@ -165,7 +186,6 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
           git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
@@ -173,6 +193,6 @@ jobs:
             exit 0
           fi
 
-          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B"
+          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B (with stable Mermaid)"
           git push
           echo "🚀 Documentation committed successfully."
