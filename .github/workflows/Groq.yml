@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI Package folder inside cpi-artifacts"
+        description: "CPI package folder inside cpi-artifacts"
         required: true
         type: string
 
@@ -29,45 +29,33 @@ jobs:
         run: |
           set -e
 
-          ###########################
-          # CONFIG
-          ###########################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="llama-3.1-70b-versatile"
+          MODEL_NAME="llama-3.3-70b-versatile"
+
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          echo "🔑 GROQ Key Length: ${#GROQ_API_KEY}"
+          echo "🔑 Groq Key Length: ${#GROQ_API_KEY}"
+          echo "📦 Processing package: $PKG_ID"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error:: Package folder not found: $BASE_PKG_DIR"
+            echo "::error:: Package not found: $BASE_PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          echo "📦 Processing package: $PKG_ID"
-
-          ###########################
-          # SYSTEM PROMPT
-          ###########################
-          SYSTEM_PROMPT="You are a senior SAP CPI Integration Architect.  
-          Generate a detailed Markdown documentation for the provided iFlow.  
-
-          Mandatory sections:
-          1. High-level architecture  
-          2. Purpose of this iFlow  
-          3. Sender/Receiver systems  
-          4. Adapter types used  
-          5. Step-by-step flow explanation  
-          6. Mapping logic summary (XML/JSON/XSLT)  
-          7. Groovy script explanations  
-          8. Error handling  
-          9. Security/authentication  
-          10. High-Level Architecture Diagram (Mermaid graph TD)  
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Generate a detailed and accurate Markdown document for this CPI iFlow including:
+          1. High-level architecture
+          2. Purpose
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow explanation
+          6. Mapping logic summary (XML/JSON/XSLT)
+          7. Groovy script logic explanation
+          8. Error handling
+          9. Security / authentication
+          10. High-Level Mermaid Diagram (graph TD)
           "
 
-          ###########################
-          # FIND iFLOW ROOT FOLDERS
-          ###########################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
@@ -80,9 +68,6 @@ jobs:
 
           ALL_DOCS_GENERATED=false
 
-          ###########################
-          # PROCESS EACH IFLOW
-          ###########################
           for ROOT in $IFLOW_ROOTS; do
 
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
@@ -92,41 +77,27 @@ jobs:
             echo "=================================================="
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
-            # Collect all readable file types
             FILES=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.iflw" -o -name "*.xml" -o -name "*.json" \
-                 -name "*.groovy" -o -name "*.xslt" \))
+                \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" \
+                -o -name "*.json" -o -name "*.xslt" \))
 
             if [ -z "$FILES" ]; then
-              echo "⚠ No readable artifacts found in: $IFLOW_NAME"
+              echo "⚠ No artifacts found in $IFLOW_NAME"
               continue
             fi
 
-            ###########################
-            # BUILD CONTENT
-            ###########################
             CONTENT=""
-
             for FILE in $FILES; do
-              echo "📄 Reading: $FILE"
-              TEXT=$(cat "$FILE" 2>/dev/null || echo "[Unreadable file]")
-              ESCAPED_TEXT=$(printf '%s\n' "$TEXT" | sed 's/`/\\`/g')
-              CONTENT+="\n--- START FILE: $FILE ---\n$ESCAPED_TEXT\n--- END FILE: $FILE ---\n"
+              TEXT=$(cat "$FILE" || echo "[Unreadable file]")
+              CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            ###########################
-            # USER PROMPT
-            ###########################
-            USER_PROMPT="Generate full documentation for the iFlow '$IFLOW_NAME':
-
+            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME':
             \`\`\`text
             $CONTENT
             \`\`\`
             "
 
-            ###########################
-            # BUILD JSON PAYLOAD
-            ###########################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -137,12 +108,9 @@ jobs:
                   {"role": "system", "content": $sys},
                   {"role": "user", "content": $usr}
                 ],
-                temperature: 0.1
+                temperature: 0.15
               }')
 
-            ###########################
-            # CALL GROQ WITH RETRY
-            ###########################
             MAX_RETRIES=3
             RETRY=0
             SUCCESS=false
@@ -151,27 +119,24 @@ jobs:
 
               RESPONSE=$(curl -s -X POST "$GROQ_URL" \
                 -H "Content-Type: application/json" \
-                -H "Authorization: Bearer $GROQ_API_KEY" \
+                -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
                 -d "$PAYLOAD")
 
-              SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+              SUMMARY=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
 
-              if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
-                echo "✅ Documentation generated for $IFLOW_NAME"
+              if [ "$SUMMARY" != "null" ] && [ -n "$SUMMARY" ]; then
+                echo "✅ Documentation created for $IFLOW_NAME"
                 echo "$SUMMARY" > "$OUTPUT_FILE"
                 SUCCESS=true
                 ALL_DOCS_GENERATED=true
                 break
               fi
 
-              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-              echo "⚠️ Groq Error: $ERROR_MSG"
+              ERR=$(echo "$RESPONSE" | jq -r ".error.message // \"Unknown error\"")
+              echo "⚠️ Groq Error: $ERR"
 
               RETRY=$((RETRY + 1))
-              WAIT=$((2 ** RETRY))
-
-              echo "🔁 Retrying in $WAIT seconds ($RETRY/$MAX_RETRIES)"
-              sleep $WAIT
+              sleep $((2 ** RETRY))
             done
 
             if [ "$SUCCESS" = false ]; then
@@ -182,22 +147,18 @@ jobs:
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
 
-
       - name: Commit Generated Documentation
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          PKG_ID="${{ github.event.inputs.package_id }}"
-
-          git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
+          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
-            echo "ℹ No changes to commit."
+            echo "ℹ No documentation changes to commit."
             exit 0
           fi
 
-          git commit -m "🤖 Auto-generated iFlow documentation using Groq"
+          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B"
           git push
-          echo "🚀 Documentation committed successfully."
