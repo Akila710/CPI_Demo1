@@ -30,7 +30,7 @@ jobs:
           set -e
 
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
-          MODEL_NAME="llama-3.3-70b-versatile"
+          MODEL_NAME="openai/gpt-oss-120b"
           
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
@@ -157,5 +157,5 @@ jobs:
             exit 0
           fi
 
-          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B"
+          git commit -m "📘 Auto-generated iFlow documentation using Groq openai/gpt-oss-120b"
           git push
