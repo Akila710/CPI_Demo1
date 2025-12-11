@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "CPI package folder (inside cpi-artifacts)"
+        description: "CPI package folder inside cpi-artifacts"
         required: true
         type: string
 
@@ -30,7 +30,7 @@ jobs:
           set -e
 
           ###############################################
-          # CONFIG
+          # CONFIGURATION
           ###############################################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
@@ -46,39 +46,38 @@ jobs:
           fi
 
           ###############################################
-          # STRICT SYSTEM PROMPT (FIXED MERMAID RULES)
+          # SYSTEM PROMPT (SAFE FOR BASH)
           ###############################################
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. 
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
           Create a complete Markdown documentation for this CPI iFlow including:
 
-          1. High-level architecture  
-          2. Purpose  
-          3. Sender/Receiver systems  
-          4. Adapter types used  
-          5. Step-by-step flow explanation  
-          6. Mapping logic summary (XML/JSON/XSLT)  
-          7. Groovy script logic explanation  
-          8. Error handling  
-          9. Security/authentication  
+          1. High-level architecture
+          2. Purpose
+          3. Sender/Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow explanation
+          6. Mapping logic summary (XML/JSON/XSLT)
+          7. Groovy script logic explanation
+          8. Error handling
+          9. Security/authentication
           10. High-Level Mermaid Diagram (graph TD)
 
           STRICT MERMAID RULES:
-          - Diagram MUST be inside a fenced code block: 
-            ```mermaid
+          - Diagram MUST be inside a fenced code block:
+            \`\`\`mermaid
             graph TD
-            ...
-            ```
-          - Only use arrow syntax: --> or -->|Label|
-          - NEVER use '|Label|>' (INVALID)
-          - Never include '>' after labels
-          - Node syntax MUST be: A[Text], B[Text], C[Text]
-          - NO styling lines (no: style A ..., no fill:, no stroke:)
-          - Keep diagram high-level: Sender --> CPI --> Receiver (top-down)
-          - Diagram must render in GitHub without errors.
+            A[Sender] --> B[CPI]
+            B --> C[Receiver]
+            \`\`\`
+          - Only use --> or -->|Label|
+          - NEVER use '|Label|>'
+          - Node syntax MUST be: A[Text]
+          - NO style lines allowed
+          - Diagram must render correctly on GitHub.
           "
 
           ###############################################
-          # FIND IFLOW ROOTS
+          # FIND IFlow ROOT FOLDERS
           ###############################################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
@@ -89,14 +88,12 @@ jobs:
           fi
 
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-
           ALL_DOCS_GENERATED=false
 
           ###############################################
-          # PROCESS EACH IFLOW
+          # PROCESS EACH IFlow
           ###############################################
           for ROOT in $IFLOW_ROOTS; do
-
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME="$ROOT"
             OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
@@ -120,7 +117,7 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.  
+            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.
             Ensure the Mermaid diagram follows STRICT GitHub syntax.
 
             \`\`\`text
@@ -129,7 +126,7 @@ jobs:
             "
 
             ###############################################
-            # BUILD PAYLOAD
+            # BUILD REQUEST PAYLOAD
             ###############################################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
@@ -167,8 +164,8 @@ jobs:
                 break
               fi
 
-              ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
-              echo "⚠️ Groq Error: $ERROR_MSG"
+              ERR_MSG=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
+              echo "⚠️ Groq Error: $ERR_MSG"
 
               RETRY=$((RETRY + 1))
               sleep $((2 ** RETRY))
@@ -186,6 +183,7 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
@@ -193,6 +191,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "📘 Auto-generated iFlow documentation using Groq Llama 3.3 70B (with stable Mermaid)"
+          git commit -m "📘 Auto-generated iFlow documentation using Groq (llama-3.3-70b-versatile)"
           git push
+
           echo "🚀 Documentation committed successfully."
