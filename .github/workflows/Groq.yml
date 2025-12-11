@@ -1,4 +1,4 @@
-name: "🤖 Generate iFlow Documentation (Groq DOCX)"
+name: "🤖 Generate iFlow Documentation (Groq DOCX + PNG)"
 
 on:
   workflow_dispatch:
@@ -13,6 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -42,13 +43,13 @@ jobs:
           echo "📦 Processing package: $PKG_ID"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error::Package directory not found: $BASE_PKG_DIR"
+            echo "::error:: Package folder not found: $BASE_PKG_DIR"
             echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
           ###############################################
-          # STATIC FALLBACK MERMAID DIAGRAM (YAML SAFE)
+          # MERMAID FALLBACK
           ###############################################
           FALLBACK_MERMAID="```mermaid
           graph TD
@@ -57,7 +58,7 @@ jobs:
           ```"
 
           ###############################################
-          # SYSTEM PROMPT (STRICT MERMAID RULES)
+          # STRICT SYSTEM PROMPT
           ###############################################
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
           Create a complete Markdown documentation for this CPI iFlow including:
@@ -71,13 +72,13 @@ jobs:
           8. Error handling
           9. Security/authentication
           10. High-Level Mermaid Diagram (graph TD)
-          
-          STRICT MERMAID RULES:
-          - Use ONLY: \`\`\`mermaid ... \`\`\`
-          - Use ONLY arrows: --> or -->|label|
+
+          STRICT RULES FOR MERMAID:
+          - Use fenced block: \`\`\`mermaid ... \`\`\`
+          - Use ONLY --> or -->|label|
           - NO styling lines
-          - NO '>|' characters
-          - Must render correctly on GitHub
+          - NO invalid characters
+          - Diagram must render in GitHub
           "
 
           ###############################################
@@ -104,6 +105,8 @@ jobs:
             IFLOW_NAME="$ROOT"
             MD_FILE="$IFLOW_DIR/$IFLOW_NAME.md"
             DOCX_FILE="$IFLOW_DIR/$IFLOW_NAME.docx"
+            PNG_FILE="$IFLOW_DIR/$IFLOW_NAME.png"
+            DIAGRAM_FILE="$IFLOW_DIR/${IFLOW_NAME}_diagram.mmd"
 
             echo "=================================================="
             echo "➡ Processing iFlow: $IFLOW_NAME"
@@ -119,19 +122,19 @@ jobs:
 
             CONTENT=""
             for FILE in $FILES; do
-              echo "📄 Reading: $FILE"
               TEXT=$(cat "$FILE" || echo "[Unreadable file]")
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
             USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.
-            Ensure the diagram strictly follows GitHub Mermaid syntax.
+            Ensure the Mermaid diagram strictly follows GitHub syntax.
+
             \`\`\`text
             $CONTENT
             \`\`\`"
 
             ###############################################
-            # BUILD PAYLOAD
+            # REQUEST PAYLOAD
             ###############################################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
@@ -147,7 +150,7 @@ jobs:
               }')
 
             ###############################################
-            # CALL GROQ API
+            # CALL GROQ
             ###############################################
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Content-Type: application/json" \
@@ -156,15 +159,38 @@ jobs:
 
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-            # If Groq fails, insert fallback Mermaid diagram
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
-              SUMMARY="Documentation could not be generated. Using fallback diagram.\n\n$FALLBACK_MERMAID"
+              SUMMARY="Documentation failed — using fallback diagram.\n\n$FALLBACK_MERMAID"
             fi
 
             echo "$SUMMARY" > "$MD_FILE"
+
+            ###############################################
+            # EXTRACT MERMAID DIAGRAM
+            ###############################################
+            sed -n '/```mermaid/,/```/p' "$MD_FILE" | sed '1d;$d' > "$DIAGRAM_FILE"
+
+            if [ ! -s "$DIAGRAM_FILE" ]; then
+              echo "graph TD; A-->B;" > "$DIAGRAM_FILE"
+            fi
+
+            ###############################################
+            # MERMAID → PNG USING KROKI (NO INSTALL)
+            ###############################################
+            curl -s -X POST https://kroki.io/mermaid/png \
+              -H "Content-Type:text/plain" \
+              --data-binary @"$DIAGRAM_FILE" \
+              -o "$PNG_FILE"
+
+            ###############################################
+            # INSERT PNG INTO DOCX
+            ###############################################
+            echo -e "\n\n![diagram]($PNG_FILE)\n" >> "$MD_FILE"
+
             pandoc "$MD_FILE" -o "$DOCX_FILE"
 
             echo "📗 DOCX created: $DOCX_FILE"
+            echo "🖼 PNG diagram created: $PNG_FILE"
 
             ALL_DOCS_GENERATED=true
 
@@ -179,11 +205,12 @@ jobs:
           git config user.email "actions@github.com"
 
           git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/*.docx"
+          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/*.png"
 
           if git diff --cached --quiet; then
-            echo "ℹ No documentation changes to commit."
+            echo "ℹ No changes to commit."
             exit 0
           fi
 
-          git commit -m "📘 Auto-generated iFlow DOCX documentation (Groq)"
+          git commit -m "📘 Auto-generated DOCX + PNG iFlow documentation (Groq)"
           git push
