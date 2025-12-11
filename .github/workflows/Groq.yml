@@ -31,7 +31,7 @@ jobs:
 
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
-
+          
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
           echo "🔑 Groq Key Length: ${#GROQ_API_KEY}"
@@ -43,7 +43,7 @@ jobs:
             exit 1
           fi
 
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Generate a detailed and accurate Markdown document for this CPI iFlow including:
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Create a complete technical Markdown document for this iFlow including:
           1. High-level architecture
           2. Purpose
           3. Sender/Receiver systems
@@ -52,7 +52,7 @@ jobs:
           6. Mapping logic summary (XML/JSON/XSLT)
           7. Groovy script logic explanation
           8. Error handling
-          9. Security / authentication
+          9. Security/authentication
           10. High-Level Mermaid Diagram (graph TD)
           "
 
@@ -69,7 +69,6 @@ jobs:
           ALL_DOCS_GENERATED=false
 
           for ROOT in $IFLOW_ROOTS; do
-
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME="$ROOT"
             OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
@@ -92,7 +91,7 @@ jobs:
               CONTENT+="\n--- START FILE: $FILE ---\n$TEXT\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME':
+            USER_PROMPT="Generate documentation for the iFlow '$IFLOW_NAME':
             \`\`\`text
             $CONTENT
             \`\`\`
@@ -116,15 +115,14 @@ jobs:
             SUCCESS=false
 
             while [ $RETRY -lt $MAX_RETRIES ]; do
-
               RESPONSE=$(curl -s -X POST "$GROQ_URL" \
                 -H "Content-Type: application/json" \
                 -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
                 -d "$PAYLOAD")
 
-              SUMMARY=$(echo "$RESPONSE" | jq -r ".choices[0].message.content")
+              SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-              if [ "$SUMMARY" != "null" ] && [ -n "$SUMMARY" ]; then
+              if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
                 echo "✅ Documentation created for $IFLOW_NAME"
                 echo "$SUMMARY" > "$OUTPUT_FILE"
                 SUCCESS=true
@@ -132,7 +130,7 @@ jobs:
                 break
               fi
 
-              ERR=$(echo "$RESPONSE" | jq -r ".error.message // \"Unknown error\"")
+              ERR=$(echo "$RESPONSE" | jq -r '.error.message // "Unknown error"')
               echo "⚠️ Groq Error: $ERR"
 
               RETRY=$((RETRY + 1))
@@ -142,7 +140,6 @@ jobs:
             if [ "$SUCCESS" = false ]; then
               echo "❌ Failed to generate documentation for: $IFLOW_NAME"
             fi
-
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
@@ -152,8 +149,8 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
+          PKG_ID="${{ github.event.inputs.package_id }}"
+          git add "cpi-artifacts/$PKG_ID/**/iFlow_Summary.md"
 
           if git diff --cached --quiet; then
             echo "ℹ No documentation changes to commit."
