@@ -51,10 +51,10 @@ jobs:
           # STATIC FALLBACK MERMAID DIAGRAM (YAML SAFE)
           ###############################################
           FALLBACK_MERMAID="```mermaid
-graph TD
-    A[Sender] --> B[CPI]
-    B --> C[Receiver]
-```"
+          graph TD
+          A[Sender] --> B[CPI]
+          B --> C[Receiver]
+          ```"
 
           ###############################################
           # SYSTEM PROMPT (STRICT MERMAID RULES)
