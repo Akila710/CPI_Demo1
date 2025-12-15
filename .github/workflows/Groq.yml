@@ -57,33 +57,50 @@ jobs:
           fi
 
           ###############################################
-          # SYSTEM PROMPT (SAFE ESCAPED MERMAID)
+          # SYSTEM PROMPT (PAGE-AWARE, MERMAID SAFE)
           ###############################################
           SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
-          Generate a complete Markdown documentation for this iFlow including:
 
-          1. High-level architecture  
-          2. Purpose  
-          3. Sender/Receiver systems  
-          4. Adapter types used  
-          5. Step-by-step flow explanation  
-          6. Mapping logic summary  
-          7. Groovy script explanation  
-          8. Error handling  
-          9. Security/authentication  
+          Create documentation with the following STRICT structure:
+
+          =========================
+          PAGE 1 (TITLE PAGE)
+          =========================
+          - iFlow name centered as a large heading
+          - Below it, a table with exactly 3 columns:
+            | Author | Date | Version |
+          - Keep page 1 content minimal and professional
+
+          =========================
+          PAGE 2 AND ONWARDS
+          =========================
+          Use Markdown headings and follow EXACT order:
+
+          1. Architecture
+          2. Purpose
+          3. Sender/Receiver
+          4. Adapters
+          5. Flow logic
+          6. Mapping
+          7. Groovy
+          8. Error handling
+          9. Security
           10. High-Level Mermaid Diagram
 
-          STRICT MERMAID RULES:
-          - Use ONLY a fenced code block:
+          =========================
+          MERMAID RULES (VERY IMPORTANT)
+          =========================
+          - Use fenced code block ONLY:
             \`\`\`mermaid
             graph TD
             A[Sender] --> B[CPI]
             B --> C[Receiver]
             \`\`\`
-          - NO styling lines
-          - NO \">|\" or \"|>\" characters
-          - ONLY --> or -->|label|
-          - Diagram must render properly on GitHub.
+          - graph TD only
+          - Use ONLY --> arrows
+          - NO styling
+          - NO '|>' or '>|'
+          - Must render on GitHub and stay editable in Markdown
           "
 
           ###############################################
@@ -116,8 +133,8 @@ jobs:
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
             FILES=$(find "$IFLOW_DIR" -type f \
-                \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" \
-                -o -name "*.json" -o -name "*.xslt" \))
+              \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" \
+                 -o -name "*.json" -o -name "*.xslt" \))
 
             if [ -z "$FILES" ]; then
               echo "⚠ No artifacts found in $IFLOW_NAME"
@@ -134,13 +151,16 @@ jobs:
             done
 
             ###############################################
-            # USER PROMPT (SAFE)
+            # USER PROMPT
             ###############################################
             USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.
-            Use the strict Mermaid rules provided.
+
+            Follow the PAGE STRUCTURE and MERMAID RULES exactly.
+
             \`\`\`text
             $CONTENT
-            \`\`\`"
+            \`\`\`
+            "
 
             ###############################################
             # BUILD PAYLOAD
