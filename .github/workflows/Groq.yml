@@ -63,36 +63,36 @@ jobs:
           # SYSTEM PROMPT
           #############################################################
           SYSTEM_PROMPT=$(cat <<'EOF'
-You are a senior SAP CPI Technical Architect.
+          You are a senior SAP CPI Technical Architect.
 
-Create documentation with the following structure.
+          Create documentation with the following structure.
 
-PAGE 1:
-- iFlow name centered
-- Table with exactly these columns:
-  | Author | Date | Version |
+          PAGE 1:
+          - iFlow name centered
+          - Table with exactly these columns:
+          | Author | Date | Version |
 
-PAGE 2 AND ONWARDS:
-1. Architecture
-2. Purpose
-3. Sender / Receiver systems
-4. Adapter types used
-5. Step-by-step flow logic
-6. Mapping logic summary
-7. Groovy script explanation
-8. Error handling
-9. Security / Authentication
-10. High-Level Mermaid Diagram
+          PAGE 2 AND ONWARDS:
+          1. Architecture
+          2. Purpose
+          3. Sender / Receiver systems
+          4. Adapter types used
+          5. Step-by-step flow logic
+          6. Mapping logic summary
+          7. Groovy script explanation
+          8. Error handling
+          9. Security / Authentication
+          10. High-Level Mermaid Diagram
 
-MERMAID RULES (STRICT):
-- Use fenced code block ```mermaid
-- graph TD
-- Only --> arrows
-- No styling, no colors
-- Must render in GitHub
-- Keep diagram editable
-EOF
-)
+          MERMAID RULES (STRICT):
+          - Use fenced code block ```mermaid
+          - graph TD
+          - Only --> arrows
+          - No styling, no colors
+          - Must render in GitHub
+          - Keep diagram editable
+          EOF
+          )
 
           #############################################################
           # FIND IFLOWS
@@ -125,13 +125,13 @@ EOF
             done
 
             USER_PROMPT=$(cat <<EOF
-Generate documentation for iFlow "$IFLOW_NAME".
+            Generate documentation for iFlow "$IFLOW_NAME".
 
-\`\`\`text
-$CONTENT
-\`\`\`
-EOF
-)
+            \`\`\`text
+            $CONTENT
+            \`\`\`
+            EOF
+            )
 
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
