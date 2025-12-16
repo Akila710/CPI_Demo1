@@ -1,4 +1,4 @@
-name: 🤖 Generate Individual iFlow Documentation (Groq)
+name: "🤖 Generate iFlow Documentation (Groq → MD + DOCX)"
 
 on:
   workflow_dispatch:
@@ -13,50 +13,60 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      ###############################################################
+      # CHECKOUT
+      ###############################################################
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install jq & unzip
+      ###############################################################
+      # INSTALL DEPENDENCIES
+      ###############################################################
+      - name: Install jq + pandoc
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq unzip
+          sudo apt-get install -y jq pandoc
 
+      ###############################################################
+      # GENERATE DOCUMENTATION
+      ###############################################################
       - name: Generate iFlow Documentation using Groq
         id: documentation_step
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
-
         run: |
           set -e
 
-          ###############################################
-          # CONFIGURATION
-          ###############################################
+          #############################################################
+          # CONFIG
+          #############################################################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+          TEMPLATE_DOCX="assets/logos/templates/reference.docx"
 
           echo "📦 Processing package: $PKG_ID"
 
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error:: Package not found: $BASE_PKG_DIR"
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-          ###############################################
-          # SYSTEM PROMPT (NO EOF, YAML SAFE)
-          ###############################################
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.\n\
-\n\
-Create documentation with the following structure.\n\
-\n\
+          if [ ! -f "$TEMPLATE_DOCX" ]; then
+            echo "::error:: reference.docx not found at $TEMPLATE_DOCX"
+            exit 1
+          fi
+
+          #############################################################
+          # SYSTEM PROMPT (BASH SAFE — NO YAML ISSUES)
+          #############################################################
+          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\n\
+Create documentation with the following structure.\n\n\
 PAGE 1:\n\
 - iFlow name centered\n\
 - Table with exactly these columns:\n\
-  | Author | Date | Version |\n\
-\n\
+  | Author | Date | Version |\n\n\
 PAGE 2 AND ONWARDS:\n\
 1. Architecture\n\
 2. Purpose\n\
@@ -67,47 +77,42 @@ PAGE 2 AND ONWARDS:\n\
 7. Groovy script explanation\n\
 8. Error handling\n\
 9. Security / Authentication\n\
-10. High-Level Mermaid Diagram\n\
-\n\
-MERMAID RULES:\n\
-- Use fenced \\\`\\\`\\\`mermaid\n\
+10. High-Level Mermaid Diagram\n\n\
+MERMAID RULES (STRICT):\n\
+- Use fenced ```mermaid\n\
 - graph TD\n\
 - Only --> arrows\n\
-- No styling\n\
+- No styling or colors\n\
 - Must render on GitHub\n\
-- Diagram must remain editable"
+- Diagram must remain editable'
 
-          ###############################################
-          # FIND IFLOW ROOTS
-          ###############################################
+          #############################################################
+          # FIND IFLOWS
+          #############################################################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
 
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlows found."
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
+
           ALL_DOCS_GENERATED=false
 
-          ###############################################
+          #############################################################
           # PROCESS EACH IFLOW
-          ###############################################
+          #############################################################
           for ROOT in $IFLOW_ROOTS; do
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME="$ROOT"
-            OUTPUT_FILE="$IFLOW_DIR/iFlow_Summary.md"
+            MD_FILE="$IFLOW_DIR/$IFLOW_NAME.md"
+            DOCX_FILE="$IFLOW_DIR/$IFLOW_NAME.docx"
 
             echo "➡ Processing iFlow: $IFLOW_NAME"
 
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \))
-
-            if [ -z "$FILES" ]; then
-              echo "⚠ No artifacts found for $IFLOW_NAME"
-              continue
-            fi
 
             CONTENT=""
             for FILE in $FILES; do
@@ -116,12 +121,7 @@ MERMAID RULES:\n\
               CONTENT+="\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.\n\
-Ensure Mermaid syntax follows the rules.\n\
-\n\
-\`\`\`text\n\
-$CONTENT\n\
-\`\`\`"
+            USER_PROMPT=$'Generate documentation for iFlow "'"$IFLOW_NAME"'".\n\n```text\n'"$CONTENT"'\n```'
 
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
@@ -137,19 +137,30 @@ $CONTENT\n\
               }')
 
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-              -H "Content-Type: application/json" \
               -H "Authorization: Bearer $GROQ_API_KEY" \
+              -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-            if [ -n "$SUMMARY" ] && [ "$SUMMARY" != "null" ]; then
-              echo "$SUMMARY" > "$OUTPUT_FILE"
-              ALL_DOCS_GENERATED=true
-              echo "✅ Documentation created for $IFLOW_NAME"
-            else
+            if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
               echo "❌ Failed for $IFLOW_NAME"
+              continue
             fi
+
+            #############################################################
+            # WRITE MD + DOCX (REFERENCE DOC APPLIED)
+            #############################################################
+            echo "$SUMMARY" > "$MD_FILE"
+
+            pandoc "$MD_FILE" \
+              --reference-doc="$TEMPLATE_DOCX" \
+              -o "$DOCX_FILE"
+
+            echo "📄 Markdown → $MD_FILE"
+            echo "📘 DOCX → $DOCX_FILE"
+
+            ALL_DOCS_GENERATED=true
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
@@ -162,10 +173,11 @@ $CONTENT\n\
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/iFlow_Summary.md"
+          git add cpi-artifacts/**/*.md
+          git add cpi-artifacts/**/*.docx
           if git diff --cached --quiet; then
             echo "No changes"
             exit 0
           fi
-          git commit -m "📘 Auto-generated iFlow documentation using Groq"
+          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
           git push
