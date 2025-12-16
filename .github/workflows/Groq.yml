@@ -1,4 +1,4 @@
-name: "🤖 Generate iFlow Documentation (Groq → MD + DOCX)"
+name: 🤖 Generate Individual iFlow Documentation (Groq → MD + DOCX)
 
 on:
   workflow_dispatch:
@@ -59,32 +59,9 @@ jobs:
           fi
 
           #############################################################
-          # SYSTEM PROMPT (BASH SAFE — NO YAML ISSUES)
+          # SYSTEM PROMPT (BASH SAFE, YAML SAFE)
           #############################################################
-          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\n\
-Create documentation with the following structure.\n\n\
-PAGE 1:\n\
-- iFlow name centered\n\
-- Table with exactly these columns:\n\
-  | Author | Date | Version |\n\n\
-PAGE 2 AND ONWARDS:\n\
-1. Architecture\n\
-2. Purpose\n\
-3. Sender / Receiver systems\n\
-4. Adapter types used\n\
-5. Step-by-step flow logic\n\
-6. Mapping logic summary\n\
-7. Groovy script explanation\n\
-8. Error handling\n\
-9. Security / Authentication\n\
-10. High-Level Mermaid Diagram\n\n\
-MERMAID RULES (STRICT):\n\
-- Use fenced ```mermaid\n\
-- graph TD\n\
-- Only --> arrows\n\
-- No styling or colors\n\
-- Must render on GitHub\n\
-- Diagram must remain editable'
+          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure.\n\nPAGE 1:\n- iFlow name centered\n- Table with exactly these columns:\n  | Author | Date | Version |\n\nPAGE 2 AND ONWARDS:\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```mermaid\n- graph TD\n- Only --> arrows\n- No styling or colors\n- Must render on GitHub\n- Diagram must remain editable'
 
           #############################################################
           # FIND IFLOWS
@@ -97,7 +74,6 @@ MERMAID RULES (STRICT):\n\
           fi
 
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-
           ALL_DOCS_GENERATED=false
 
           #############################################################
@@ -114,6 +90,11 @@ MERMAID RULES (STRICT):\n\
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \))
 
+            if [ -z "$FILES" ]; then
+              echo "⚠ No artifacts found for $IFLOW_NAME"
+              continue
+            fi
+
             CONTENT=""
             for FILE in $FILES; do
               CONTENT+="\n--- START FILE: $FILE ---\n"
@@ -121,7 +102,7 @@ MERMAID RULES (STRICT):\n\
               CONTENT+="\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT=$'Generate documentation for iFlow "'"$IFLOW_NAME"'".\n\n```text\n'"$CONTENT"'\n```'
+            USER_PROMPT=$'Generate documentation for iFlow '"$IFLOW_NAME"$'.\n\n```text\n'"$CONTENT"$'\n```'
 
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
@@ -149,7 +130,7 @@ MERMAID RULES (STRICT):\n\
             fi
 
             #############################################################
-            # WRITE MD + DOCX (REFERENCE DOC APPLIED)
+            # WRITE FILES
             #############################################################
             echo "$SUMMARY" > "$MD_FILE"
 
@@ -158,7 +139,7 @@ MERMAID RULES (STRICT):\n\
               -o "$DOCX_FILE"
 
             echo "📄 Markdown → $MD_FILE"
-            echo "📘 DOCX → $DOCX_FILE"
+            echo "📘 DOCX (with header logos) → $DOCX_FILE"
 
             ALL_DOCS_GENERATED=true
           done
@@ -173,11 +154,14 @@ MERMAID RULES (STRICT):\n\
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
           git add cpi-artifacts/**/*.md
           git add cpi-artifacts/**/*.docx
+
           if git diff --cached --quiet; then
-            echo "No changes"
+            echo "No changes to commit."
             exit 0
           fi
+
           git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
           git push
