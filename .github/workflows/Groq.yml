@@ -1,4 +1,4 @@
-name: 🤖 Generate Individual iFlow Documentation (Groq → MD + DOCX)
+name: "🤖 Generate iFlow Documentation (Groq → MD + DOCX)"
 
 on:
   workflow_dispatch:
@@ -13,155 +13,121 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      ###############################################################
-      # CHECKOUT
-      ###############################################################
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      ###############################################################
-      # INSTALL DEPENDENCIES
-      ###############################################################
       - name: Install jq + pandoc
         run: |
           sudo apt-get update
           sudo apt-get install -y jq pandoc
 
-      ###############################################################
-      # GENERATE DOCUMENTATION
-      ###############################################################
       - name: Generate iFlow Documentation using Groq
         id: documentation_step
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
+
         run: |
           set -e
 
-          #############################################################
-          # CONFIG
-          #############################################################
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
 
-          echo "📦 Processing package: $PKG_ID"
-
           if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error:: Package not found: $BASE_PKG_DIR"
+            echo "::error:: Package not found"
             exit 1
           fi
 
           if [ ! -f "$TEMPLATE_DOCX" ]; then
-            echo "::error:: reference.docx not found at $TEMPLATE_DOCX"
+            echo "::error:: reference.docx missing"
             exit 1
           fi
 
-          #############################################################
-          # SYSTEM PROMPT (BASH SAFE, YAML SAFE)
-          #############################################################
-          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure.\n\nPAGE 1:\n- iFlow name centered\n- Table with exactly these columns:\n  | Author | Date | Version |\n\nPAGE 2 AND ONWARDS:\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```mermaid\n- graph TD\n- Only --> arrows\n- No styling or colors\n- Must render on GitHub\n- Diagram must remain editable'
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
+Create documentation with:
+PAGE 1:
+- iFlow name centered
+- Table: Author | Date | Version
 
-          #############################################################
-          # FIND IFLOWS
-          #############################################################
+PAGE 2+:
+1. Architecture
+2. Purpose
+3. Sender/Receiver
+4. Adapters
+5. Flow logic
+6. Mapping
+7. Groovy
+8. Error handling
+9. Security
+10. Mermaid diagram (graph TD)
+
+Mermaid rules:
+- Use fenced ```mermaid
+- graph TD
+- Only --> arrows"
+
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
-
-          if [ -z "$FULL_IFLOW_PATHS" ]; then
-            echo "::warning:: No iFlows found."
-            exit 0
-          fi
-
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
-          ALL_DOCS_GENERATED=false
 
-          #############################################################
-          # PROCESS EACH IFLOW
-          #############################################################
           for ROOT in $IFLOW_ROOTS; do
             IFLOW_DIR="$BASE_PKG_DIR/$ROOT"
             IFLOW_NAME="$ROOT"
+
             MD_FILE="$IFLOW_DIR/$IFLOW_NAME.md"
             DOCX_FILE="$IFLOW_DIR/$IFLOW_NAME.docx"
 
-            echo "➡ Processing iFlow: $IFLOW_NAME"
-
-            FILES=$(find "$IFLOW_DIR" -type f \
-              \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \))
-
-            if [ -z "$FILES" ]; then
-              echo "⚠ No artifacts found for $IFLOW_NAME"
-              continue
-            fi
+            AUTHOR="$(git log -1 --pretty=format:'%an')"
+            DATE="$(date +'%Y-%m-%d')"
+            VERSION="1.0"
 
             CONTENT=""
-            for FILE in $FILES; do
-              CONTENT+="\n--- START FILE: $FILE ---\n"
-              CONTENT+="$(cat "$FILE")"
-              CONTENT+="\n--- END FILE: $FILE ---\n"
+            for FILE in $(find "$IFLOW_DIR" -type f); do
+              CONTENT+="\n--- $FILE ---\n$(cat "$FILE")\n"
             done
 
-            USER_PROMPT=$'Generate documentation for iFlow '"$IFLOW_NAME"$'.\n\n```text\n'"$CONTENT"$'\n```'
+            USER_PROMPT="Generate documentation for iFlow $IFLOW_NAME.
+$content:
+$CONTENT"
 
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
               --arg usr "$USER_PROMPT" \
-              '{
-                model: $model,
-                messages: [
-                  { "role": "system", "content": $sys },
-                  { "role": "user", "content": $usr }
-                ],
-                temperature: 0.1
-              }')
+              '{model:$model,messages:[{role:"system",content:$sys},{role:"user",content:$usr}],temperature:0.1}')
 
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
               -H "Authorization: Bearer $GROQ_API_KEY" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
-            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+            BODY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
-            if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
-              echo "❌ Failed for $IFLOW_NAME"
-              continue
-            fi
+            cat <<EOF > "$MD_FILE"
+<div style="text-align:center; margin-top:100px;">
+<h1>$IFLOW_NAME</h1>
+</div>
 
-            #############################################################
-            # WRITE FILES
-            #############################################################
-            echo "$SUMMARY" > "$MD_FILE"
+<table style="margin-left:auto;margin-right:auto; width:40%;" border="1">
+<tr><th>Author</th><th>Date</th><th>Version</th></tr>
+<tr><td>$AUTHOR</td><td>$DATE</td><td>$VERSION</td></tr>
+</table>
+
+<div style="page-break-after: always;"></div>
+
+$BODY
+EOF
 
             pandoc "$MD_FILE" \
               --reference-doc="$TEMPLATE_DOCX" \
               -o "$DOCX_FILE"
-
-            echo "📄 Markdown → $MD_FILE"
-            echo "📘 DOCX (with header logos) → $DOCX_FILE"
-
-            ALL_DOCS_GENERATED=true
           done
 
-          echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
-
-      ###############################################################
-      # COMMIT RESULTS
-      ###############################################################
-      - name: Commit Generated Documentation
-        if: steps.documentation_step.outputs.docs_generated == 'true'
+      - name: Commit Generated Docs
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          git add cpi-artifacts/**/*.md
-          git add cpi-artifacts/**/*.docx
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
+          git add cpi-artifacts/**/*.md cpi-artifacts/**/*.docx
+          git commit -m "📘 Auto-generated CPI documentation" || echo "No changes"
           git push
