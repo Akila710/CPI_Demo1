@@ -11,8 +11,6 @@ on:
 jobs:
   document:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
 
     steps:
       ###############################################################
@@ -46,7 +44,13 @@ jobs:
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+
+          # Your reference.docx (styles + header logos)
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
+
+          # Cover-page metadata
+          AUTHOR_NAME="Nidhi Srivastava"
+          VERSION_LABEL="Draft"
 
           echo "📦 Processing package: $PKG_ID"
 
@@ -61,44 +65,17 @@ jobs:
           fi
 
           #############################################################
-          # SYSTEM PROMPT (YAML + BASH SAFE)
+          # SYSTEM PROMPT (CONTENT ONLY, COVER PAGE IS OUR JOB)
           #############################################################
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.
-
-Create documentation with:
-
-PAGE 1:
-- iFlow name centered
-- Table with exactly these columns:
-  Author | Date | Version
-
-PAGE 2 AND ONWARDS:
-1. Architecture
-2. Purpose
-3. Sender / Receiver systems
-4. Adapter types used
-5. Step-by-step flow logic
-6. Mapping logic summary
-7. Groovy script explanation
-8. Error handling
-9. Security / Authentication
-10. High-Level Mermaid Diagram
-
-Mermaid rules:
-- Use fenced ```mermaid
-- graph TD
-- Only --> arrows
-- No styling
-- Must render on GitHub
-"
+          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```
 
           #############################################################
           # FIND IFLOWS
           #############################################################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
-
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlows found."
+            echo "docs_generated=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -118,7 +95,6 @@ Mermaid rules:
 
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \))
-
             if [ -z "$FILES" ]; then
               echo "⚠ No artifacts found for $IFLOW_NAME"
               continue
@@ -131,12 +107,7 @@ Mermaid rules:
               CONTENT+="\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT="Generate documentation for iFlow '$IFLOW_NAME'.
-
-\`\`\`text
-$CONTENT
-\`\`\`
-"
+            USER_PROMPT=$'Generate documentation (sections only, no cover page) for iFlow '"$IFLOW_NAME"$'.\n\n```text\n'"$CONTENT"$'\n```
 
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
@@ -156,22 +127,48 @@ $CONTENT
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
-            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices.message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
               echo "❌ Failed for $IFLOW_NAME"
               continue
             fi
 
-            echo "$SUMMARY" > "$MD_FILE"
+            #############################################################
+            # BUILD FINAL MARKDOWN WITH COVER PAGE + BODY
+            #############################################################
+            mkdir -p "$IFLOW_DIR"
 
+            cat > "$MD_FILE" <<EOF
+***
+title: "$IFLOW_NAME"
+author: "$AUTHOR_NAME"
+date: "$(date +%Y-%m-%d)"
+version: "$VERSION_LABEL"
+***
+
+<!-- COVER PAGE -->
+
+# $IFLOW_NAME
+
+| Author | Date | Version |
+|--------|------|---------|
+| $AUTHOR_NAME | $(date +%Y-%m-%d) | $VERSION_LABEL |
+
+\newpage
+
+$SUMMARY
+EOF
+
+            #############################################################
+            # CONVERT TO DOCX USING REFERENCE TEMPLATE
+            #############################################################
             pandoc "$MD_FILE" \
               --reference-doc="$TEMPLATE_DOCX" \
               -o "$DOCX_FILE"
 
-            echo "📄 MD   → $MD_FILE"
-            echo "📘 DOCX → $DOCX_FILE"
-
+            echo "📄 Markdown → $MD_FILE"
+            echo "📘 DOCX (with reference styles) → $DOCX_FILE"
             ALL_DOCS_GENERATED=true
           done
 
@@ -185,14 +182,11 @@ $CONTENT
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/*.md"
-          git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/*.docx"
-
+          git add cpi-artifacts/**/*.md
+          git add cpi-artifacts/**/*.docx
           if git diff --cached --quiet; then
-            echo "ℹ No documentation changes to commit."
+            echo "No changes to commit."
             exit 0
           fi
-
-          git commit -m "📘 Auto-generated iFlow documentation (Groq)"
+          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
           git push
