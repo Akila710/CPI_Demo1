@@ -111,16 +111,9 @@ jobs:
             done
 
             #############################################################
-            # USER PROMPT (SAFE)
+            # USER PROMPT (ONE LINE)
             #############################################################
-            USER_PROMPT=$(cat <<EOF
-            Generate documentation (sections only, no cover page) for iFlow $IFLOW_NAME.
-
-            \`\`\`text
-            $CONTENT
-            \`\`\`
-            EOF
-                    )
+            USER_PROMPT="Generate documentation (sections only, no cover page) for iFlow $IFLOW_NAME.\n\n\`\`\`text\n$CONTENT\n\`\`\`"
 
             #############################################################
             # CALL GROQ
