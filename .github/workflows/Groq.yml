@@ -45,10 +45,8 @@ jobs:
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
-          # reference.docx with logos / first-page styles
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
 
-          # Leave these blank and edit later in Word
           AUTHOR_NAME=""
           VERSION_LABEL=""
 
@@ -65,14 +63,15 @@ jobs:
           fi
 
           #############################################################
-          # SYSTEM PROMPT (CONTENT ONLY, NO COVER PAGE)
+          # SYSTEM PROMPT (ONE LINE)
           #############################################################
-          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```mermaid\n- graph TD\n- Only --> arrows\n- No styling or colors\n- Must render on GitHub\n- Diagram must remain editable.'
+          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure.\nDo NOT add a title page, logos, or author table.\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```mermaid\n- graph TD\n- Only --> arrows\n- No styling or colors\n- Must render on GitHub\n- Diagram must remain editable"
 
           #############################################################
           # FIND IFLOWS
           #############################################################
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
+
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlows found."
             echo "docs_generated=false" >> "$GITHUB_OUTPUT"
@@ -95,11 +94,15 @@ jobs:
 
             FILES=$(find "$IFLOW_DIR" -type f \
               \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \))
+
             if [ -z "$FILES" ]; then
               echo "⚠ No artifacts found for $IFLOW_NAME"
               continue
             fi
 
+            #############################################################
+            # COLLECT CONTENT
+            #############################################################
             CONTENT=""
             for FILE in $FILES; do
               CONTENT+="\n--- START FILE: $FILE ---\n"
@@ -107,11 +110,21 @@ jobs:
               CONTENT+="\n--- END FILE: $FILE ---\n"
             done
 
-            USER_PROMPT=$'Generate documentation (sections only, no cover page) for iFlow '"$IFLOW_NAME"$'.\n\n```text\n'"$CONTENT"$'\n```
+            #############################################################
+            # USER PROMPT (SAFE)
+            #############################################################
+            USER_PROMPT=$(cat <<EOF
+            Generate documentation (sections only, no cover page) for iFlow $IFLOW_NAME.
 
-            ###########################################################
+            \`\`\`text
+            $CONTENT
+            \`\`\`
+            EOF
+                    )
+
+            #############################################################
             # CALL GROQ
-            ###########################################################
+            #############################################################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -126,7 +139,7 @@ jobs:
               }')
 
             RESPONSE=$(curl -s -X POST "$GROQ_URL" \
-              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
+              -H "Authorization: Bearer $GROQ_API_KEY" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
@@ -134,12 +147,12 @@ jobs:
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
               echo "❌ Failed for $IFLOW_NAME"
-              echo "Response was: $RESPONSE"
+              echo "$RESPONSE"
               continue
             fi
 
             #############################################################
-            # BUILD FINAL MARKDOWN WITH COVER PAGE + BODY
+            # BUILD MARKDOWN
             #############################################################
             mkdir -p "$IFLOW_DIR"
 
@@ -151,12 +164,10 @@ date: "$(date +%Y-%m-%d)"
 version: "$VERSION_LABEL"
 ---
 
-<!-- COVER PAGE -->
-
 # $IFLOW_NAME
 
-| Author       | Date           | Version        |
-|--------------|----------------|----------------|
+| Author | Date | Version |
+|-------|------|---------|
 | $AUTHOR_NAME | $(date +%Y-%m-%d) | $VERSION_LABEL |
 
 \newpage
@@ -165,14 +176,15 @@ $SUMMARY
 EOF
 
             #############################################################
-            # CONVERT TO DOCX USING REFERENCE TEMPLATE
+            # CONVERT TO DOCX
             #############################################################
             pandoc "$MD_FILE" \
               --reference-doc="$TEMPLATE_DOCX" \
               -o "$DOCX_FILE"
 
             echo "📄 Markdown → $MD_FILE"
-            echo "📘 DOCX (with reference styles) → $DOCX_FILE"
+            echo "📘 DOCX → $DOCX_FILE"
+
             ALL_DOCS_GENERATED=true
           done
 
