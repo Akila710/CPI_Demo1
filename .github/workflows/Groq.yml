@@ -67,7 +67,7 @@ jobs:
           #############################################################
           # SYSTEM PROMPT (CONTENT ONLY, NO COVER PAGE)
           #############################################################
-          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```
+          SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```mermaid\n- graph TD\n- Only --> arrows\n- No styling or colors\n- Must render on GitHub\n- Diagram must remain editable.'
 
           #############################################################
           # FIND IFLOWS
