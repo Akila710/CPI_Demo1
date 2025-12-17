@@ -1,3 +1,35 @@
+name: "🤖 Generate Individual iFlow Documentation (Groq → MD + DOCX)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_id:
+        description: "CPI package folder inside cpi-artifacts"
+        required: true
+        type: string
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+
+    steps:
+      ###############################################################
+      # CHECKOUT
+      ###############################################################
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ###############################################################
+      # INSTALL DEPENDENCIES
+      ###############################################################
+      - name: Install jq + pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq pandoc
+
+      ###############################################################
+      # GENERATE DOCUMENTATION
+      ###############################################################
       - name: Generate iFlow Documentation using Groq
         id: documentation_step
         env:
@@ -13,8 +45,10 @@
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
 
+          # reference.docx with logos / first-page styles
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
 
+          # Leave these blank and edit later in Word
           AUTHOR_NAME=""
           VERSION_LABEL=""
 
@@ -31,7 +65,7 @@
           fi
 
           #############################################################
-          # SYSTEM PROMPT (CLOSED CORRECTLY)
+          # SYSTEM PROMPT (CONTENT ONLY, NO COVER PAGE)
           #############################################################
           SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```
 
@@ -41,7 +75,7 @@
           FULL_IFLOW_PATHS=$(find "$BASE_PKG_DIR" -type f \( -name "*.iflw" -o -name "iFlowContent.xml" \))
           if [ -z "$FULL_IFLOW_PATHS" ]; then
             echo "::warning:: No iFlows found."
-            echo "docs_generated=false" >> $GITHUB_OUTPUT
+            echo "docs_generated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -96,7 +130,6 @@
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
-            # Correct jq path for chat.completions
             SUMMARY=$(echo "$RESPONSE" | jq -r '.choices.message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
@@ -131,13 +164,33 @@ version: "$VERSION_LABEL"
 $SUMMARY
 EOF
 
+            #############################################################
+            # CONVERT TO DOCX USING REFERENCE TEMPLATE
+            #############################################################
             pandoc "$MD_FILE" \
               --reference-doc="$TEMPLATE_DOCX" \
               -o "$DOCX_FILE"
 
             echo "📄 Markdown → $MD_FILE"
-            echo "📘 DOCX → $DOCX_FILE"
+            echo "📘 DOCX (with reference styles) → $DOCX_FILE"
             ALL_DOCS_GENERATED=true
           done
 
-          echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
+          echo "docs_generated=$ALL_DOCS_GENERATED" >> "$GITHUB_OUTPUT"
+
+      ###############################################################
+      # COMMIT RESULTS
+      ###############################################################
+      - name: Commit Generated Documentation
+        if: steps.documentation_step.outputs.docs_generated == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add cpi-artifacts/**/*.md
+          git add cpi-artifacts/**/*.docx
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
+          git push
