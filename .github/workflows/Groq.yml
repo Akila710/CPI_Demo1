@@ -1,3 +1,35 @@
+name: "🤖 Generate Individual iFlow Documentation (Groq → MD + DOCX)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_id:
+        description: "CPI package folder inside cpi-artifacts"
+        required: true
+        type: string
+
+jobs:
+  document:
+    runs-on: ubuntu-latest
+
+    steps:
+      ###############################################################
+      # CHECKOUT
+      ###############################################################
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      ###############################################################
+      # INSTALL DEPENDENCIES
+      ###############################################################
+      - name: Install jq + pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq pandoc
+
+      ###############################################################
+      # GENERATE DOCUMENTATION
+      ###############################################################
       - name: Generate iFlow Documentation using Groq
         id: documentation_step
         env:
@@ -12,10 +44,13 @@
           GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
+
+          # reference.docx with logos / first-page styles
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
 
-          AUTHOR_NAME="Nidhi Srivastava"
-          VERSION_LABEL="Draft"
+          # Leave these blank so you can edit them later in Word
+          AUTHOR_NAME=""
+          VERSION_LABEL=""
 
           echo "📦 Processing package: $PKG_ID"
 
@@ -30,7 +65,7 @@
           fi
 
           #############################################################
-          # SYSTEM PROMPT (CONTENT ONLY)
+          # SYSTEM PROMPT (CONTENT ONLY, NO COVER PAGE)
           #############################################################
           SYSTEM_PROMPT=$'You are a senior SAP CPI Technical Architect.\n\nCreate documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):\n\n1. Architecture\n2. Purpose\n3. Sender / Receiver systems\n4. Adapter types used\n5. Step-by-step flow logic\n6. Mapping logic summary\n7. Groovy script explanation\n8. Error handling\n9. Security / Authentication\n10. High-Level Mermaid Diagram\n\nMERMAID RULES (STRICT):\n- Use fenced ```
 
@@ -74,6 +109,9 @@
 
             USER_PROMPT=$'Generate documentation (sections only, no cover page) for iFlow '"$IFLOW_NAME"$'.\n\n```text\n'"$CONTENT"$'\n```
 
+            ###########################################################
+            # CALL GROQ
+            ###########################################################
             PAYLOAD=$(jq -n \
               --arg model "$MODEL_NAME" \
               --arg sys "$SYSTEM_PROMPT" \
@@ -116,8 +154,8 @@ version: "$VERSION_LABEL"
 
 # $IFLOW_NAME
 
-| Author | Date | Version |
-|--------|------|---------|
+| Author       | Date           | Version        |
+|--------------|----------------|----------------|
 | $AUTHOR_NAME | $(date +%Y-%m-%d) | $VERSION_LABEL |
 
 \newpage
@@ -138,3 +176,20 @@ EOF
           done
 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> $GITHUB_OUTPUT
+
+      ###############################################################
+      # COMMIT RESULTS
+      ###############################################################
+      - name: Commit Generated Documentation
+        if: steps.documentation_step.outputs.docs_generated == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add cpi-artifacts/**/*.md
+          git add cpi-artifacts/**/*.docx
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
+          git push
