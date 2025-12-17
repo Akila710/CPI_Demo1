@@ -130,7 +130,7 @@ jobs:
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
 
-            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices.message.content')
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
 
             if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
               echo "❌ Failed for $IFLOW_NAME"
