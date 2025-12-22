@@ -8,7 +8,7 @@ on:
         required: true
 
 jobs:
-  generate-docs:
+  generate:
     runs-on: ubuntu-latest
 
     steps:
@@ -22,16 +22,16 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install -r requirements.txt
+          pip install python-docx requests
 
-      - name: Generate Documentation
+      - name: Generate iFlow Docs
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
-          python scripts/generate_docs.py
+          python scripts/generate_iflow_docs_groq.py
 
-      - name: Upload Artifacts
+      - name: Upload Output
         uses: actions/upload-artifact@v4
         with:
           name: CPI-iFlow-Docs
