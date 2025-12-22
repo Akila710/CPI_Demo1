@@ -3,12 +3,13 @@ import requests
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import date
+import sys
 
 # ---------------- CONFIG ----------------
 ARTIFACTS_DIR = "cpi-artifacts"
 TEMPLATE_DOCX = "assets/logos/templates/reference.docx"
 
-AUTHOR = ""              # ✅ blank as requested
+AUTHOR = ""           # ✅ blank
 VERSION = "Draft"
 TODAY = date.today().isoformat()
 
@@ -35,7 +36,7 @@ if not iflows:
 print(f"📦 Package: {PACKAGE_NAME}")
 print(f"🔎 iFlows found: {iflows}")
 
-# ---------------- GROQ ----------------
+# ---------------- GROQ SUMMARY ----------------
 def groq_summary(iflow_name):
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -48,14 +49,15 @@ def groq_summary(iflow_name):
             "messages": [
                 {"role": "system", "content": "You are a SAP CPI Technical Architect."},
                 {"role": "user", "content": f"""
-Generate SAP CPI technical documentation for iFlow "{iflow_name}" with:
+Generate SAP CPI iFlow technical documentation with:
 - Purpose
 - Sender / Receiver
 - Adapters
 - Flow Logic
 - Error Handling
+
+iFlow Name: {iflow_name}
 """}
-            ]
         }
     )
 
@@ -63,37 +65,41 @@ Generate SAP CPI technical documentation for iFlow "{iflow_name}" with:
 
 # ---------------- PROCESS EACH IFLOW ----------------
 for iflow in iflows:
-    IFLOW_PATH = os.path.join(PACKAGE_PATH, iflow)
+    iflow_path = os.path.join(PACKAGE_PATH, iflow)
 
-    print(f"➡ Processing iFlow: {iflow}")
+    print(f"➡ Generating docs for iFlow: {iflow}")
 
     summary = groq_summary(iflow)
 
     # ---------- MARKDOWN (INSIDE IFLOW FOLDER) ----------
-    md_path = os.path.join(IFLOW_PATH, f"{iflow}.md")
+    md_path = os.path.join(iflow_path, f"{iflow}.md")
     with open(md_path, "w", encoding="utf-8") as md:
         md.write(f"# {iflow}\n\n{summary}")
 
-    # ---------- DOCX (INSIDE IFLOW FOLDER) ----------
+    # ---------- DOCX ----------
     doc = Document(TEMPLATE_DOCX)
 
+    # Replace placeholders in COVER PAGE only
     for p in doc.paragraphs:
         p.text = p.text.replace("{{AUTHOR}}", AUTHOR)
         p.text = p.text.replace("{{DATE}}", TODAY)
         p.text = p.text.replace("{{VERSION}}", VERSION)
 
+    # Page break after cover
     doc.add_page_break()
 
+    # Centered iFlow name
     title = doc.add_paragraph(iflow)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.runs[0].bold = True
 
-    doc.add_heading("1. Introduction", level=1)
-    doc.add_paragraph(summary)
+    # Add Groq content (SAME AS MD)
+    for line in summary.split("\n"):
+        doc.add_paragraph(line)
 
-    docx_path = os.path.join(IFLOW_PATH, f"{iflow}.docx")
+    docx_path = os.path.join(iflow_path, f"{iflow}.docx")
     doc.save(docx_path)
 
-    print(f"✅ Generated for iFlow: {iflow}")
+    print(f"✅ Generated: {md_path}, {docx_path}")
 
 print("🎉 All iFlow documents generated successfully")
