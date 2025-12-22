@@ -3,39 +3,57 @@ import requests
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import date
+import sys
 
 # ---------------- CONFIG ----------------
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-PACKAGE_NAME = os.getenv("PACKAGE_NAME")
-
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-MODEL = "llama-3.3-70b-versatile"
-
 ARTIFACTS_DIR = "cpi-artifacts"
-TEMPLATE = "assets/logos/templates/reference.docx"
+TEMPLATE_DOCX = "assets/logos/templates/reference.docx"
+OUTPUT_DIR = "output"
 
-AUTHOR = "Auto Generated"
+AUTHOR = ""  # ✅ BLANK as requested
 VERSION = "Draft"
 TODAY = date.today().isoformat()
 
-pkg_path = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PACKAGE_NAME = os.getenv("PACKAGE_NAME")
 
-if not os.path.isdir(pkg_path):
-    raise Exception(f"Package not found: {pkg_path}")
+if not PACKAGE_NAME:
+    raise Exception("PACKAGE_NAME not provided")
 
-iflows = [f for f in os.listdir(pkg_path) if f.endswith(".xml")]
+PACKAGE_PATH = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
+
+if not os.path.isdir(PACKAGE_PATH):
+    raise Exception(f"Package not found: {PACKAGE_PATH}")
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ---------------- FIND IFLOWS (FIXED) ----------------
+iflows = []
+
+for root, dirs, files in os.walk(PACKAGE_PATH):
+    for file in files:
+        if file.endswith(".xml") and "iflow" in root.lower():
+            iflows.append(os.path.join(root, file))
 
 if not iflows:
     raise Exception("No iFlows found")
 
+print(f"Found iFlows: {iflows}")
+
 # ---------------- GROQ CALL ----------------
-def generate_summary(iflow_name, xml):
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": "You are a SAP CPI Technical Architect."},
-            {"role": "user", "content": f"""
-Generate SAP CPI iFlow documentation with:
+def groq_summary(iflow_name, xml):
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": "You are a SAP CPI Technical Architect."},
+                {"role": "user", "content": f"""
+Generate SAP CPI technical documentation with:
 - Purpose
 - Sender / Receiver
 - Adapters
@@ -43,42 +61,30 @@ Generate SAP CPI iFlow documentation with:
 - Error Handling
 
 iFlow Name: {iflow_name}
+
 XML:
 {xml}
 """}
-        ]
-    }
-
-    r = requests.post(
-        GROQ_URL,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json=payload
+            ]
+        }
     )
 
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"]
 
 # ---------------- PROCESS EACH IFLOW ----------------
-for iflow in iflows:
-    iflow_name = iflow.replace(".xml", "")
-    xml_path = os.path.join(pkg_path, iflow)
-    xml_content = open(xml_path, encoding="utf-8").read()
+for iflow_path in iflows:
+    iflow_name = os.path.basename(os.path.dirname(iflow_path))
+    xml = open(iflow_path, encoding="utf-8").read()
 
-    print(f"📄 Generating docs for {iflow_name}")
+    summary = groq_summary(iflow_name, xml)
 
-    summary = generate_summary(iflow_name, xml_content)
-
-    # -------- MARKDOWN --------
-    md_path = os.path.join(pkg_path, f"{iflow_name}.md")
+    # ---------- MARKDOWN ----------
+    md_path = f"{OUTPUT_DIR}/{PACKAGE_NAME}_{iflow_name}.md"
     with open(md_path, "w", encoding="utf-8") as md:
-        md.write(f"# {iflow_name}\n\n")
-        md.write(summary)
+        md.write(f"# {iflow_name}\n\n{summary}")
 
-    # -------- DOCX --------
-    doc = Document(TEMPLATE)
+    # ---------- DOCX ----------
+    doc = Document(TEMPLATE_DOCX)
 
     # Replace placeholders
     for p in doc.paragraphs:
@@ -86,18 +92,18 @@ for iflow in iflows:
         p.text = p.text.replace("{{DATE}}", TODAY)
         p.text = p.text.replace("{{VERSION}}", VERSION)
 
-    # 👉 ADD IFLOW NAME AT CENTER (FIRST PAGE)
+    # Add centered iFlow name (YOUR REQUIREMENT)
+    doc.add_page_break()
     title = doc.add_paragraph(iflow_name)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.runs[0].bold = True
-    title.runs[0].font.size = 240000  # 24pt
 
-    doc.add_page_break()
-
-    doc.add_heading("Integration Scenario", level=1)
+    doc.add_heading("1. Introduction", level=1)
     doc.add_paragraph(summary)
 
-    docx_path = os.path.join(pkg_path, f"{iflow_name}.docx")
+    docx_path = f"{OUTPUT_DIR}/{PACKAGE_NAME}_{iflow_name}.docx"
     doc.save(docx_path)
 
-    print(f"✅ Generated {iflow_name}.docx and .md")
+    print(f"Generated docs for iFlow: {iflow_name}")
+
+print("✅ All iFlow documents generated")
