@@ -6,27 +6,41 @@ on:
       package:
         description: "CPI Package Name (folder under cpi-artifacts)"
         required: true
+        type: string
 
 jobs:
-  generate:
+  generate-docs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ Setup Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
+      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install python-docx requests
 
+      # 4️⃣ Generate iFlow documentation using Groq
       - name: Generate iFlow documentation
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
           python scripts/generate_docs.py
+
+      # 5️⃣ Upload generated docs as artifact
+      - name: Upload generated documents
+        uses: actions/upload-artifact@v4
+        with:
+          name: CPI-iFlow-Documentation
+          path: cpi-artifacts/${{ inputs.package }}
+          if-no-files-found: warn
