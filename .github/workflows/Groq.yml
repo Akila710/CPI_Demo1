@@ -29,7 +29,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
-          python scripts/generate_iflow_docs_groq.py
+          python scripts/generate_docs.py
 
       - name: Upload Output
         uses: actions/upload-artifact@v4
