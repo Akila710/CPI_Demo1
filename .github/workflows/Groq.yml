@@ -1,36 +1,6 @@
-name: Generate CPI iFlow Docs (Groq)
-
-on:
-  workflow_dispatch:
-    inputs:
-      package:
-        description: "CPI Package Name"
-        required: true
-
-jobs:
-  generate:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          pip install python-docx requests
-
-      - name: Generate iFlow docs
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PACKAGE_NAME: ${{ inputs.package }}
-        run: |
-          python scripts/generate_docs.py
-
-      - name: Upload iFlow Docs
-        uses: actions/upload-artifact@v4
-        with:
-          name: CPI-iFlow-Docs
-          path: cpi-artifacts/${{ inputs.package }}/
+- name: Generate Docs
+  env:
+    GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+    PACKAGE_NAME: Demo
+  run: |
+    python scripts/generate_docs.py
