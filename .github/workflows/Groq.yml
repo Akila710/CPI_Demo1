@@ -37,6 +37,7 @@ jobs:
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
           set -e
+
           #############################################################
           # CONFIG
           #############################################################
@@ -44,32 +45,33 @@ jobs:
           MODEL_NAME="llama-3.3-70b-versatile"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
           TEMPLATE_DOCX="assets/logos/templates/reference.docx"
-          AUTHOR_NAME="Technical Team"
-          VERSION_LABEL="1.0"
-          
+          AUTHOR_NAME=""
+          VERSION_LABEL=""
+
           echo "📦 Processing package: $PKG_ID"
-          
+
           if [ ! -d "$BASE_PKG_DIR" ]; then
             echo "::error:: Package not found: $BASE_PKG_DIR"
             exit 1
           fi
-          
+
           if [ ! -f "$TEMPLATE_DOCX" ]; then
             echo "::error:: reference.docx not found at $TEMPLATE_DOCX"
             exit 1
           fi
-          
+
           if [[ -z "$GROQ_API_KEY" ]]; then
             echo "::error:: GROQ_API_KEY missing"
             exit 1
           fi
-          
-          #############################################################
-          # SYSTEM PROMPT (CONTENT ONLY)
-          #############################################################
-          SYSTEM_PROMPT='You are a senior SAP CPI Technical Architect.
 
-          Create documentation with the following structure:
+          #############################################################
+          # SYSTEM PROMPT (multi-line, safe for YAML)
+          #############################################################
+          read -r -d '' SYSTEM_PROMPT << 'EOF'
+You are a senior SAP CPI Technical Architect.
+
+Create documentation with the following structure (do NOT add a title page, logos, or author table – that will be added externally):
 
 1. Architecture
 2. Purpose
@@ -88,8 +90,9 @@ MERMAID RULES (STRICT):
 - Only --> arrows
 - No styling or colors
 - Must render on GitHub
-- Diagram must remain editable.'
-          
+- Diagram must remain editable.
+EOF
+
           #############################################################
           # FIND IFLOWS
           #############################################################
@@ -99,10 +102,10 @@ MERMAID RULES (STRICT):
             echo "docs_generated=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          
+
           IFLOW_ROOTS=$(echo "$FULL_IFLOW_PATHS" | sed "s|^$BASE_PKG_DIR/||" | cut -d/ -f1 | sort -u)
           ALL_DOCS_GENERATED=false
-          
+
           #############################################################
           # PROCESS EACH IFLOW
           #############################################################
@@ -111,15 +114,15 @@ MERMAID RULES (STRICT):
             IFLOW_NAME="$ROOT"
             MD_FILE="$IFLOW_DIR/$IFLOW_NAME.md"
             DOCX_FILE="$IFLOW_DIR/$IFLOW_NAME.docx"
-            
+
             echo "➡ Processing iFlow: $IFLOW_NAME"
-            
+
             FILES=$(find "$IFLOW_DIR" -type f \( -name "*.iflw" -o -name "*.xml" -o -name "*.groovy" -o -name "*.xslt" \) 2>/dev/null)
             if [ -z "$FILES" ]; then
               echo "⚠ No artifacts found for $IFLOW_NAME"
               continue
             fi
-            
+
             # Build content safely with size limit
             CONTENT=""
             FILE_COUNT=0
@@ -132,11 +135,11 @@ MERMAID RULES (STRICT):
               CONTENT="${CONTENT}\n--- START FILE: $FILE ---\n${FILE_CONTENT}\n--- END FILE: $FILE ---\n"
               ((FILE_COUNT++))
             done
-            
-            # Create temp prompt file to avoid quoting issues
+
+            # Build user prompt via here-doc to avoid quoting issues
             TEMP_PROMPT=$(mktemp)
             cat > "$TEMP_PROMPT" << EOF
-Generate documentation (sections only) for iFlow "${IFLOW_NAME}".
+Generate documentation (sections only, no cover page) for iFlow "${IFLOW_NAME}".
 
 \`\`\`text
 ${CONTENT}
@@ -144,7 +147,7 @@ ${CONTENT}
 EOF
             USER_PROMPT=$(cat "$TEMP_PROMPT")
             rm "$TEMP_PROMPT"
-            
+
             ###########################################################
             # CALL GROQ
             ###########################################################
@@ -158,55 +161,42 @@ EOF
                   { "role": "system", "content": $sys },
                   { "role": "user", "content": $usr }
                 ],
-                temperature: 0.1,
-                max_tokens: 8000
+                temperature: 0.1
               }')
-            
-            RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$GROQ_URL" \
-              -H "Authorization: Bearer $GROQ_API_KEY" \
+
+            RESPONSE=$(curl -s -X POST "$GROQ_URL" \
+              -H "Authorization: Bearer '"$GROQ_API_KEY"'" \
               -H "Content-Type: application/json" \
               -d "$PAYLOAD")
-            
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            SUMMARY=$(echo "$RESPONSE" | sed '$d' | jq -r '.choices.message.content // empty')
-            
-            if [[ "$HTTP_CODE" != "200" ]] || [[ -z "$SUMMARY" ]] || [[ "$SUMMARY" == "null" ]]; then
-              echo "❌ Groq API failed for $IFLOW_NAME (HTTP: $HTTP_CODE)"
+
+            SUMMARY=$(echo "$RESPONSE" | jq -r '.choices.message.content // empty')
+
+            if [ -z "$SUMMARY" ] || [ "$SUMMARY" = "null" ]; then
+              echo "❌ Failed for $IFLOW_NAME"
+              echo "Response was: $RESPONSE"
               continue
             fi
-            
+
             #############################################################
-            # BUILD FINAL MARKDOWN WITH HEADER LOGOS + CENTER TABLE
+            # BUILD FINAL MARKDOWN (no title page; header handled by DOCX template)
             #############################################################
-            mkdir -p "$(dirname "$MD_FILE")"
-            
+            mkdir -p "$IFLOW_DIR"
+
             cat > "$MD_FILE" << EOF
-***
+---
 title: "$IFLOW_NAME"
 author: "$AUTHOR_NAME"
 date: "$(date +%Y-%m-%d)"
 version: "$VERSION_LABEL"
-geometry: margin=1in
-header-includes: |
-  \\usepackage{fancyhdr}
-  \\pagestyle{fancy}
-  \\fancyhf{}
-  \\rhead{\\includegraphics[width=1.5in]{assets/logos/sap-logo.png}}
-  \\chead{$IFLOW_NAME}
-  \\lhead{\\includegraphics[width=1in]{assets/logos/company-logo.png}}
----
-
-![SAP Logo](assets/logos/sap-logo.png=1in align=right #id .header-logo}
+***
 
 # $IFLOW_NAME
 
-<br><br><br>
+| Author       | Date           | Version        |
+|--------------|----------------|----------------|
+| $AUTHOR_NAME | $(date +%Y-%m-%d) | $VERSION_LABEL |
 
-| **Author**       | **Date**         | **Version**     |
-|------------------|------------------|-----------------|
-| $AUTHOR_NAME     | $(date +%Y-%m-%d) | $VERSION_LABEL  |
-
-<br><br>
+\newpage
 
 $SUMMARY
 EOF
@@ -214,15 +204,12 @@ EOF
             #############################################################
             # CONVERT TO DOCX USING REFERENCE TEMPLATE
             #############################################################
-            if pandoc "$MD_FILE" \
+            pandoc "$MD_FILE" \
               --reference-doc="$TEMPLATE_DOCX" \
-              -o "$DOCX_FILE" 2>/dev/null; then
-              echo "✅ DOCX generated → $DOCX_FILE"
-            else
-              echo "⚠ DOCX conversion failed, keeping MD → $MD_FILE"
-            fi
-            
+              -o "$DOCX_FILE"
+
             echo "📄 Markdown → $MD_FILE"
+            echo "📘 DOCX (with reference styles) → $DOCX_FILE"
             ALL_DOCS_GENERATED=true
           done
 
@@ -234,14 +221,13 @@ EOF
       - name: Commit Generated Documentation
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cpi-artifacts/**/*.md cpi-artifacts/**/*.docx || true
-          
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add cpi-artifacts/**/*.md
+          git add cpi-artifacts/**/*.docx
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
-          
-          git commit -m "📘 Auto-generated iFlow documentation w/ logos & header (Groq → MD + DOCX) [skip ci]"
+          git commit -m "📘 Auto-generated iFlow documentation (Groq → MD + DOCX)"
           git push
