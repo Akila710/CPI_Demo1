@@ -1,33 +1,41 @@
 import os
 import requests
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import date
 
-# ---------- CONFIG ----------
-ARTIFACTS_DIR = "cpi-artifacts"
-TEMPLATE = "assets/logos/templates/reference.docx"
-OUTPUT_DIR = "output"
-
+# ---------------- CONFIG ----------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PACKAGE_NAME = os.getenv("PACKAGE_NAME")
 
-MODEL = "llama-3.3-70b-versatile"
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+MODEL = "llama-3.3-70b-versatile"
+
+ARTIFACTS_DIR = "cpi-artifacts"
+TEMPLATE = "assets/logos/templates/reference.docx"
 
 AUTHOR = "Auto Generated"
 VERSION = "Draft"
 TODAY = date.today().isoformat()
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+pkg_path = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
 
-# ---------- GROQ ----------
+if not os.path.isdir(pkg_path):
+    raise Exception(f"Package not found: {pkg_path}")
+
+iflows = [f for f in os.listdir(pkg_path) if f.endswith(".xml")]
+
+if not iflows:
+    raise Exception("No iFlows found")
+
+# ---------------- GROQ CALL ----------------
 def generate_summary(iflow_name, xml):
     payload = {
         "model": MODEL,
         "messages": [
             {"role": "system", "content": "You are a SAP CPI Technical Architect."},
             {"role": "user", "content": f"""
-Generate a SAP CPI technical summary with:
+Generate SAP CPI iFlow documentation with:
 - Purpose
 - Sender / Receiver
 - Adapters
@@ -35,7 +43,6 @@ Generate a SAP CPI technical summary with:
 - Error Handling
 
 iFlow Name: {iflow_name}
-
 XML:
 {xml}
 """}
@@ -48,28 +55,24 @@ XML:
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         },
-        json=payload,
-        timeout=60
+        json=payload
     )
 
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
-# ---------- MAIN ----------
-package_path = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
-iflows = [f for f in os.listdir(package_path) if f.endswith(".xml")]
-
+# ---------------- PROCESS EACH IFLOW ----------------
 for iflow in iflows:
     iflow_name = iflow.replace(".xml", "")
-    xml_path = os.path.join(package_path, iflow)
-    xml = open(xml_path, encoding="utf-8").read()
+    xml_path = os.path.join(pkg_path, iflow)
+    xml_content = open(xml_path, encoding="utf-8").read()
 
-    print(f"🔹 Processing iFlow: {iflow_name}")
+    print(f"📄 Generating docs for {iflow_name}")
 
-    summary = generate_summary(iflow_name, xml)
+    summary = generate_summary(iflow_name, xml_content)
 
     # -------- MARKDOWN --------
-    md_path = f"{OUTPUT_DIR}/{iflow_name}.md"
+    md_path = os.path.join(pkg_path, f"{iflow_name}.md")
     with open(md_path, "w", encoding="utf-8") as md:
         md.write(f"# {iflow_name}\n\n")
         md.write(summary)
@@ -77,20 +80,24 @@ for iflow in iflows:
     # -------- DOCX --------
     doc = Document(TEMPLATE)
 
+    # Replace placeholders
     for p in doc.paragraphs:
         p.text = p.text.replace("{{AUTHOR}}", AUTHOR)
         p.text = p.text.replace("{{DATE}}", TODAY)
         p.text = p.text.replace("{{VERSION}}", VERSION)
-        p.text = p.text.replace("{{IFLOW_NAME}}", iflow_name)
+
+    # 👉 ADD IFLOW NAME AT CENTER (FIRST PAGE)
+    title = doc.add_paragraph(iflow_name)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.runs[0].bold = True
+    title.runs[0].font.size = 240000  # 24pt
 
     doc.add_page_break()
 
-    doc.add_heading("1. Integration Scenario", level=1)
+    doc.add_heading("Integration Scenario", level=1)
     doc.add_paragraph(summary)
 
-    out_doc = f"{OUTPUT_DIR}/{iflow_name}.docx"
-    doc.save(out_doc)
+    docx_path = os.path.join(pkg_path, f"{iflow_name}.docx")
+    doc.save(docx_path)
 
-    print(f"✅ Generated: {out_doc}")
-
-print("🎉 All iFlow documents generated")
+    print(f"✅ Generated {iflow_name}.docx and .md")
