@@ -3,7 +3,6 @@ import requests
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import date
-import sys
 
 # ---------------- CONFIG ----------------
 ARTIFACTS_DIR = "cpi-artifacts"
@@ -12,7 +11,10 @@ TEMPLATE_DOCX = "assets/logos/templates/reference.docx"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PACKAGE_NAME = os.getenv("PACKAGE_NAME")
 
-AUTHOR = ""            # must be blank
+MODEL = "llama-3.3-70b-versatile"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+AUTHOR = ""        # MUST BE BLANK
 VERSION = "Draft"
 TODAY = date.today().isoformat()
 
@@ -24,22 +26,21 @@ PACKAGE_PATH = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
 if not os.path.isdir(PACKAGE_PATH):
     raise Exception(f"Package not found: {PACKAGE_PATH}")
 
-# ---------------- FIND IFLOWS (CORRECT LOGIC) ----------------
-iflows = [
+# ---------------- FIND IFLOW FOLDERS ----------------
+iflow_dirs = [
     d for d in os.listdir(PACKAGE_PATH)
     if os.path.isdir(os.path.join(PACKAGE_PATH, d))
 ]
 
-if not iflows:
-    raise Exception(f"No iFlows found inside {PACKAGE_PATH}")
+if not iflow_dirs:
+    raise Exception(f"No iFlow folders found inside {PACKAGE_PATH}")
 
-print(f"📦 Package: {PACKAGE_NAME}")
-print(f"🔎 iFlows found: {iflows}")
+print(f"Found iFlows: {iflow_dirs}")
 
-# ---------------- GROQ CALL ----------------
-def groq_summary(iflow_name):
+# ---------------- GROQ SUMMARY ----------------
+def groq_summary(iflow_name, xml_content):
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": MODEL,
         "messages": [
             {
                 "role": "system",
@@ -48,7 +49,7 @@ def groq_summary(iflow_name):
             {
                 "role": "user",
                 "content": f"""
-Generate SAP CPI technical documentation with:
+Generate SAP CPI iFlow technical documentation with:
 - Purpose
 - Sender / Receiver
 - Adapters
@@ -56,58 +57,76 @@ Generate SAP CPI technical documentation with:
 - Error Handling
 
 iFlow Name: {iflow_name}
+
+XML:
+{xml_content}
 """
             }
         ]
     }
 
     response = requests.post(
-        "https://api.groq.com/openai/v1/chat/completions",
+        GROQ_URL,
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json"
         },
-        json=payload
+        json=payload,
+        timeout=60
     )
 
     response.raise_for_status()
     return response.json()["choices"][0]["message"]["content"]
 
 # ---------------- PROCESS EACH IFLOW ----------------
-for iflow in iflows:
+for iflow in iflow_dirs:
     iflow_path = os.path.join(PACKAGE_PATH, iflow)
 
-    print(f"🧩 Processing iFlow: {iflow}")
+    # find xml inside iflow folder
+    xml_files = [f for f in os.listdir(iflow_path) if f.endswith(".xml")]
 
-    summary = groq_summary(iflow)
+    if not xml_files:
+        print(f"⚠️ No XML found in {iflow}, skipping")
+        continue
 
-    # ---------- MARKDOWN ----------
+    xml_path = os.path.join(iflow_path, xml_files[0])
+    xml_content = open(xml_path, encoding="utf-8").read()
+
+    print(f"📄 Generating docs for iFlow: {iflow}")
+
+    summary = groq_summary(iflow, xml_content)
+
+    # ---------------- MARKDOWN ----------------
     md_path = os.path.join(iflow_path, f"{iflow}.md")
     with open(md_path, "w", encoding="utf-8") as md:
         md.write(f"# {iflow}\n\n{summary}")
 
-    # ---------- DOCX ----------
+    # ---------------- DOCX ----------------
     doc = Document(TEMPLATE_DOCX)
 
-    # Replace header table values ONLY (structure stays)
+    # Replace only placeholders (structure remains)
     for p in doc.paragraphs:
         p.text = p.text.replace("{{AUTHOR}}", AUTHOR)
         p.text = p.text.replace("{{DATE}}", TODAY)
         p.text = p.text.replace("{{VERSION}}", VERSION)
+        p.text = p.text.replace("{{PACKAGE_NAME}}", PACKAGE_NAME)
 
+    # New page for iFlow content
     doc.add_page_break()
 
-    # Centered iFlow title
+    # Centered iFlow name
     title = doc.add_paragraph(iflow)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.runs[0].bold = True
+    run = title.runs[0]
+    run.bold = True
 
-    doc.add_paragraph(summary)
+    # Add Groq content
+    for line in summary.split("\n"):
+        doc.add_paragraph(line)
 
     docx_path = os.path.join(iflow_path, f"{iflow}.docx")
     doc.save(docx_path)
 
-    print(f"✅ Generated: {md_path}")
-    print(f"✅ Generated: {docx_path}")
+    print(f"✅ Generated inside {iflow_path}")
 
 print("🎉 All iFlow documents generated successfully")
