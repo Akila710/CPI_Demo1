@@ -7,9 +7,8 @@ from datetime import date
 # ---------------- CONFIG ----------------
 ARTIFACTS_DIR = "cpi-artifacts"
 TEMPLATE_DOCX = "assets/logos/templates/reference.docx"
-OUTPUT_DIR = "output"
 
-AUTHOR = ""               # ✅ BLANK
+AUTHOR = ""              # ✅ blank as requested
 VERSION = "Draft"
 TODAY = date.today().isoformat()
 
@@ -24,26 +23,20 @@ PACKAGE_PATH = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
 if not os.path.isdir(PACKAGE_PATH):
     raise Exception(f"Package not found: {PACKAGE_PATH}")
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ---------------- FIND IFLOWS (FIXED PROPERLY) ----------------
-iflows = []
-
-for root, dirs, files in os.walk(PACKAGE_PATH):
-    for file in files:
-        if file.lower().endswith(".xml"):
-            # ignore CPI metadata xmls if any
-            if "parameters" in file.lower():
-                continue
-            iflows.append(os.path.join(root, file))
+# ---------------- FIND IFLOWS (CORRECT WAY) ----------------
+iflows = [
+    d for d in os.listdir(PACKAGE_PATH)
+    if os.path.isdir(os.path.join(PACKAGE_PATH, d))
+]
 
 if not iflows:
     raise Exception(f"No iFlows found inside {PACKAGE_PATH}")
 
-print(f"✅ Found {len(iflows)} iFlows")
+print(f"📦 Package: {PACKAGE_NAME}")
+print(f"🔎 iFlows found: {iflows}")
 
-# ---------------- GROQ SUMMARY ----------------
-def groq_summary(iflow_name, xml):
+# ---------------- GROQ ----------------
+def groq_summary(iflow_name):
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
@@ -53,19 +46,14 @@ def groq_summary(iflow_name, xml):
         json={
             "model": "llama-3.3-70b-versatile",
             "messages": [
-                {"role": "system", "content": "You are a senior SAP CPI Technical Architect."},
+                {"role": "system", "content": "You are a SAP CPI Technical Architect."},
                 {"role": "user", "content": f"""
-Generate SAP CPI technical documentation with:
+Generate SAP CPI technical documentation for iFlow "{iflow_name}" with:
 - Purpose
 - Sender / Receiver
 - Adapters
 - Flow Logic
 - Error Handling
-
-iFlow Name: {iflow_name}
-
-XML:
-{xml}
 """}
             ]
         }
@@ -74,40 +62,38 @@ XML:
     return response.json()["choices"][0]["message"]["content"]
 
 # ---------------- PROCESS EACH IFLOW ----------------
-for iflow_path in iflows:
-    iflow_name = os.path.splitext(os.path.basename(iflow_path))[0]
+for iflow in iflows:
+    IFLOW_PATH = os.path.join(PACKAGE_PATH, iflow)
 
-    with open(iflow_path, encoding="utf-8", errors="ignore") as f:
-        xml = f.read()
+    print(f"➡ Processing iFlow: {iflow}")
 
-    summary = groq_summary(iflow_name, xml)
+    summary = groq_summary(iflow)
 
-    # ---------- MARKDOWN ----------
-    md_path = f"{OUTPUT_DIR}/{PACKAGE_NAME}_{iflow_name}.md"
+    # ---------- MARKDOWN (INSIDE IFLOW FOLDER) ----------
+    md_path = os.path.join(IFLOW_PATH, f"{iflow}.md")
     with open(md_path, "w", encoding="utf-8") as md:
-        md.write(f"# {iflow_name}\n\n{summary}")
+        md.write(f"# {iflow}\n\n{summary}")
 
-    # ---------- DOCX ----------
+    # ---------- DOCX (INSIDE IFLOW FOLDER) ----------
     doc = Document(TEMPLATE_DOCX)
 
-    # Replace cover placeholders
     for p in doc.paragraphs:
         p.text = p.text.replace("{{AUTHOR}}", AUTHOR)
         p.text = p.text.replace("{{DATE}}", TODAY)
         p.text = p.text.replace("{{VERSION}}", VERSION)
 
-    # New page → iFlow title centered
     doc.add_page_break()
-    title = doc.add_paragraph(iflow_name)
+
+    title = doc.add_paragraph(iflow)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.runs[0].bold = True
 
     doc.add_heading("1. Introduction", level=1)
     doc.add_paragraph(summary)
 
-    docx_path = f"{OUTPUT_DIR}/{PACKAGE_NAME}_{iflow_name}.docx"
+    docx_path = os.path.join(IFLOW_PATH, f"{iflow}.docx")
     doc.save(docx_path)
 
-    print(f"📄 Generated docs for iFlow: {iflow_name}")
+    print(f"✅ Generated for iFlow: {iflow}")
 
 print("🎉 All iFlow documents generated successfully")
