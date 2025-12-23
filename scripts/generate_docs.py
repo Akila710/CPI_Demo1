@@ -1,156 +1,185 @@
 import os
+import requests
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from datetime import date
 
-PACKAGE = os.getenv("PACKAGE_NAME")
-BASE_DIR = f"cpi-artifacts/{PACKAGE}"
-
+# ---------------- CONFIG ----------------
+BASE_DIR = "cpi-artifacts"
 SAP_LOGO = "assets/logos/SAP.jpg"
 MM_LOGO = "assets/logos/mm_logo.png"
 
-TODAY = date.today().isoformat()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PACKAGE_NAME = os.getenv("PACKAGE_NAME")
+
+AUTHOR = ""
 VERSION = "Draft"
+TODAY = date.today().isoformat()
 
-if not os.path.isdir(BASE_DIR):
-    raise Exception(f"Package not found: {BASE_DIR}")
+# ---------------- VALIDATION ----------------
+if not PACKAGE_NAME:
+    raise Exception("PACKAGE_NAME not provided")
 
-# ---------------- HEADER (ONCE) ----------------
-def add_header(doc):
+PACKAGE_PATH = os.path.join(BASE_DIR, PACKAGE_NAME)
+if not os.path.isdir(PACKAGE_PATH):
+    raise Exception(f"Package not found: {PACKAGE_PATH}")
+
+# ---------------- FIND IFLOWS ----------------
+iflows = []
+for item in os.listdir(PACKAGE_PATH):
+    iflow_path = os.path.join(PACKAGE_PATH, item)
+    if os.path.isdir(iflow_path):
+        iflows.append(item)
+
+if not iflows:
+    raise Exception("No iFlows found")
+
+print(f"Found iFlows: {iflows}")
+
+# ---------------- GROQ CALL ----------------
+def groq_generate(iflow_name, iflw_content):
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a SAP CPI Technical Architect. "
+                    "Generate clean technical documentation in plain text ONLY. "
+                    "Do NOT use markdown symbols like ## or **."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"""
+Generate documentation with these sections:
+
+1. Introduction
+1.1 Purpose
+1.2 Scope
+
+2. Integration Overview
+2.1 Integration Architecture
+2.2 Integration Components (Sender, Receiver, Adapters)
+
+3. Integration Scenarios
+3.1 Scenario Description
+3.2 Data Flows
+3.3 Security Requirements
+
+4. Error Handling and Logging
+5. Testing Validation
+6. Reference Documents
+
+iFlow Name: {iflow_name}
+
+iFlow Content:
+{iflw_content}
+"""
+            }
+        ]
+    }
+
+    r = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json=payload
+    )
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
+
+# ---------------- DOCUMENT CREATION ----------------
+for iflow in iflows:
+    iflow_dir = os.path.join(PACKAGE_PATH, iflow)
+
+    iflw_file = None
+    for root, _, files in os.walk(iflow_dir):
+        for f in files:
+            if f.endswith(".iflw"):
+                iflw_file = os.path.join(root, f)
+
+    if not iflw_file:
+        print(f"⚠️ No .iflw found for {iflow}, skipping")
+        continue
+
+    with open(iflw_file, encoding="utf-8") as f:
+        iflw_content = f.read()
+
+    content = groq_generate(iflow, iflw_content)
+
+    # ---------- MARKDOWN ----------
+    md_path = os.path.join(iflow_dir, f"{iflow}.md")
+    with open(md_path, "w", encoding="utf-8") as md:
+        md.write(f"{iflow}\n\n{content}")
+
+    # ---------- DOCX ----------
+    doc = Document()
+
+    # Header logos
     section = doc.sections[0]
     header = section.header
-    header.paragraphs.clear()
+    header_para = header.paragraphs[0]
+    header_para.add_run().add_picture(SAP_LOGO, width=Inches(1))
+    header_para.add_run("\t\t")
+    header_para.add_run().add_picture(MM_LOGO, width=Inches(1))
 
-    table = header.add_table(rows=1, cols=2, width=section.page_width)
-    left, right = table.rows[0].cells
+    # Cover Page
+    doc.add_paragraph("\n\n")
+    title = doc.add_paragraph(iflow)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.runs[0].font.size = Pt(22)
+    title.runs[0].bold = True
 
-    lp = left.paragraphs[0]
-    lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    lp.add_run().add_picture(SAP_LOGO, width=Inches(1.2))
-
-    rp = right.paragraphs[0]
-    rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    rp.add_run().add_picture(MM_LOGO, width=Inches(1.2))
-
-# ---------------- TITLE PAGE ----------------
-def add_title_page(doc, iflow):
-    p = doc.add_paragraph(iflow)
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p.runs[0].font.size = Pt(24)
-    p.runs[0].bold = True
-
-    doc.add_paragraph("")
-
+    doc.add_paragraph("\n")
     table = doc.add_table(rows=3, cols=2)
-    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    table.cell(0,0).text = "Author"
-    table.cell(0,1).text = ""
-    table.cell(1,0).text = "Date"
-    table.cell(1,1).text = TODAY
-    table.cell(2,0).text = "Version"
-    table.cell(2,1).text = VERSION
+    table.style = "Table Grid"
+    table.cell(0, 0).text = "Author:"
+    table.cell(0, 1).text = AUTHOR
+    table.cell(1, 0).text = "Date:"
+    table.cell(1, 1).text = TODAY
+    table.cell(2, 0).text = "Version:"
+    table.cell(2, 1).text = VERSION
 
     doc.add_page_break()
 
-# ---------------- TOC PAGE ----------------
-def add_toc(doc):
-    doc.add_heading("Table of Contents", level=1)
+    # TOC Page (static)
+    toc = doc.add_paragraph("Table of Contents")
+    toc.runs[0].bold = True
 
-    toc = [
+    toc_items = [
         "1. Introduction",
-        "   1.1 Purpose",
-        "   1.2 Scope",
+        "    1.1 Purpose",
+        "    1.2 Scope",
         "2. Integration Overview",
-        "   2.1 Integration Architecture",
-        "   2.2 Integration Components",
+        "    2.1 Integration Architecture",
+        "    2.2 Integration Components",
         "3. Integration Scenarios",
-        "   3.1 Scenario Description",
+        "    3.1 Scenario Description",
+        "    3.2 Data Flows",
+        "    3.3 Security Requirements",
         "4. Error Handling and Logging",
         "5. Testing Validation",
         "6. Reference Documents"
     ]
 
-    for line in toc:
-        doc.add_paragraph(line)
+    for item in toc_items:
+        doc.add_paragraph(item)
 
     doc.add_page_break()
 
-# ---------------- CONTENT ----------------
-def add_content(doc, iflow):
-    doc.add_heading("1. Introduction", level=1)
-    doc.add_heading("1.1 Purpose", level=2)
-    doc.add_paragraph(
-        f"The purpose of {iflow} is to integrate source and target systems "
-        "using SAP Cloud Platform Integration."
-    )
+    # Main Content
+    for line in content.split("\n"):
+        p = doc.add_paragraph(line)
+        if line.strip().startswith(("1.", "2.", "3.", "4.", "5.", "6.")):
+            p.runs[0].bold = True
 
-    doc.add_heading("1.2 Scope", level=2)
-    doc.add_paragraph(
-        f"This document covers the design, architecture, and execution of {iflow}."
-    )
+    docx_path = os.path.join(iflow_dir, f"{iflow}.docx")
+    doc.save(docx_path)
 
-    doc.add_heading("2. Integration Overview", level=1)
-    doc.add_heading("2.1 Integration Architecture", level=2)
-    doc.add_paragraph("The integration architecture is illustrated below.")
+    print(f"✅ Generated for {iflow}")
 
-    doc.add_heading("2.2 Integration Components", level=2)
-
-    table = doc.add_table(rows=1, cols=2)
-    table.style = "Table Grid"
-    table.cell(0,0).text = "Component"
-    table.cell(0,1).text = "Value"
-
-    rows = [
-        ("Sender", "Source System"),
-        ("Sender Adapter", "HTTPS"),
-        ("Receiver", "Target System"),
-        ("Receiver Adapter", "ODATA")
-    ]
-
-    for r in rows:
-        c = table.add_row().cells
-        c[0].text = r[0]
-        c[1].text = r[1]
-
-    doc.add_heading("3. Integration Scenarios", level=1)
-    doc.add_heading("3.1 Scenario Description", level=2)
-    doc.add_paragraph(
-        f"The {iflow} scenario involves message processing, transformation, "
-        "and delivery between systems."
-    )
-
-    doc.add_heading("4. Error Handling and Logging", level=1)
-    doc.add_paragraph("Errors are handled using CPI exception subprocesses.")
-
-    doc.add_heading("5. Testing Validation", level=1)
-    doc.add_paragraph("Functional and integration testing is performed.")
-
-    doc.add_heading("6. Reference Documents", level=1)
-    doc.add_paragraph("SAP CPI Documentation")
-
-# ---------------- MAIN ----------------
-for iflow in os.listdir(BASE_DIR):
-    IFLOW_PATH = os.path.join(BASE_DIR, iflow)
-    if not os.path.isdir(IFLOW_PATH):
-        continue
-
-    doc = Document()
-    add_header(doc)
-    add_title_page(doc, iflow)
-    add_toc(doc)
-    add_content(doc, iflow)
-
-    doc_path = os.path.join(IFLOW_PATH, f"{iflow}.docx")
-    md_path = os.path.join(IFLOW_PATH, f"{iflow}.md")
-
-    doc.save(doc_path)
-
-    with open(md_path, "w") as md:
-        md.write(f"# {iflow}\n\n")
-        md.write("## 1. Introduction\n")
-        md.write("### 1.1 Purpose\n")
-        md.write(f"{iflow} integration purpose.\n")
-
-    print(f"✅ Generated docs for {iflow}")
+print("🎉 All iFlow documents generated successfully")
