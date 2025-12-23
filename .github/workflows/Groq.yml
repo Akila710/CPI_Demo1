@@ -1,4 +1,4 @@
-name: Generate CPI iFlow Docs (Groq)
+name: Generate CPI iFlow Docs
 
 on:
   workflow_dispatch:
@@ -20,11 +20,10 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install python-docx requests
+          pip install python-docx
 
       - name: Generate docs
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
           python scripts/generate_docs.py
@@ -33,6 +32,6 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add cpi-artifacts/
-          git commit -m "Auto-generate iFlow documentation" || echo "No changes"
+          git add cpi-artifacts
+          git commit -m "Auto-generate CPI iFlow documentation" || echo "No changes"
           git push
