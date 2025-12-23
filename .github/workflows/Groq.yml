@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "CPI Package Name (folder under cpi-artifacts)"
+        description: "CPI Package Name (e.g. Demo)"
         required: true
 
 jobs:
@@ -30,3 +30,11 @@ jobs:
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
           python scripts/generate_docs.py
+
+      - name: Commit generated docs to repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add cpi-artifacts
+          git commit -m "Auto-generate CPI iFlow documentation" || echo "No changes"
+          git push
