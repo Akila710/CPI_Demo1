@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "CPI Package Name"
+        description: "CPI Package name (folder under cpi-artifacts)"
         required: true
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       - name: Install deps
         run: pip install python-docx
 
-      - name: Generate Docs
+      - name: Generate docs
         env:
           PACKAGE_NAME: ${{ inputs.package }}
         run: python scripts/generate_docs.py
