@@ -1,98 +1,86 @@
 import os
+from datetime import date
 import requests
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from datetime import date
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# ---------------- CONFIG ----------------
+BASE_DIR = "cpi-artifacts"
 PACKAGE = os.getenv("PACKAGE_NAME")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
 
-BASE = f"cpi-artifacts/{PACKAGE}"
+SAP_LOGO = "assets/logos/SAP.jpg"
+MM_LOGO = "assets/logos/mm_logo.png"
+
 TODAY = date.today().isoformat()
-VERSION = "Draft"
 
-def groq_summary(iflow_name, iflw_path):
-    content = open(iflw_path, encoding="utf-8", errors="ignore").read()
+if not PACKAGE:
+    raise Exception("PACKAGE_NAME not set")
 
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": "You are an SAP CPI Integration Architect. Respond in plain text only."},
-            {"role": "user", "content": f"""
-Generate clean SAP CPI documentation (NO markdown symbols).
+PKG_PATH = os.path.join(BASE_DIR, PACKAGE)
+if not os.path.isdir(PKG_PATH):
+    raise Exception(f"Package not found: {PKG_PATH}")
 
-Sections:
-1. Introduction
-1.1 Purpose
-1.2 Scope
-2. Integration Overview
-2.1 Integration Architecture
-2.2 Integration Components (list sender, receiver, adapters if known)
-3. Integration Scenarios
-3.1 Scenario Description
-4. Error Handling and Logging
-5. Testing Validation
-6. Reference Documents
-
-iFlow name: {iflow_name}
-
-Definition:
-{content}
-"""}
-        ]
-    }
-
+# ---------------- GROQ ----------------
+def groq(text):
     r = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Authorization": f"Bearer {GROQ_KEY}",
             "Content-Type": "application/json"
         },
-        json=payload
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": "You are a SAP CPI Technical Architect."},
+                {"role": "user", "content": text}
+            ]
+        }
     )
-
     return r.json()["choices"][0]["message"]["content"]
 
-def add_logos(doc):
-    p = doc.add_paragraph()
-    run = p.add_run()
-    run.add_picture("assets/logos/SAP.png", width=Inches(1.2))
+# ---------------- HELPERS ----------------
+def add_header(doc):
+    section = doc.sections[0]
+    header = section.header
+    header.paragraphs[0].clear()
+
+    p = header.paragraphs[0]
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    p.add_run().add_picture(SAP_LOGO, width=Inches(1.2))
 
-    p2 = doc.add_paragraph()
-    run2 = p2.add_run()
-    run2.add_picture("assets/logos/motiveminds.png", width=Inches(1.5))
-    p2.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p = header.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.add_run().add_picture(MM_LOGO, width=Inches(1.2))
 
-def add_title_page(doc, iflow):
-    add_logos(doc)
+def title_page(doc, iflow):
+    add_header(doc)
 
-    title = doc.add_paragraph(iflow)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.runs[0].bold = True
-    title.runs[0].font.size = Pt(22)
+    doc.add_paragraph("\n\n")
+    t = doc.add_paragraph(iflow)
+    t.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    t.runs[0].font.size = Pt(24)
+    t.runs[0].bold = True
 
-    doc.add_paragraph("")
+    doc.add_paragraph("\n")
 
     table = doc.add_table(rows=3, cols=2)
     table.style = "Table Grid"
-    table.cell(0,0).text = "Author:"
+    table.cell(0,0).text = "Author"
     table.cell(0,1).text = ""
-    table.cell(1,0).text = "Date:"
+    table.cell(1,0).text = "Date"
     table.cell(1,1).text = TODAY
-    table.cell(2,0).text = "Version:"
-    table.cell(2,1).text = VERSION
+    table.cell(2,0).text = "Version"
+    table.cell(2,1).text = "Draft"
 
     doc.add_page_break()
 
-def add_toc(doc):
-    add_logos(doc)
-    toc = doc.add_paragraph("Table of Contents")
-    toc.runs[0].bold = True
-    toc.runs[0].font.size = Pt(14)
+def toc_page(doc):
+    add_header(doc)
+    doc.add_heading("Table of Contents", level=1)
 
-    items = [
+    toc = [
         "1. Introduction",
         "   1.1 Purpose",
         "   1.2 Scope",
@@ -105,47 +93,53 @@ def add_toc(doc):
         "5. Testing Validation",
         "6. Reference Documents"
     ]
-
-    for i in items:
-        doc.add_paragraph(i)
+    for line in toc:
+        doc.add_paragraph(line)
 
     doc.add_page_break()
 
-def add_content(doc, text):
-    add_logos(doc)
-    for line in text.split("\n"):
-        p = doc.add_paragraph(line)
-        if line.strip() and line[0].isdigit():
-            p.runs[0].bold = True
-            p.runs[0].font.size = Pt(12)
-
-for iflow in os.listdir(BASE):
-    path = os.path.join(BASE, iflow)
-    if not os.path.isdir(path):
+# ---------------- MAIN ----------------
+for iflow in os.listdir(PKG_PATH):
+    IFLOW_PATH = os.path.join(PKG_PATH, iflow)
+    if not os.path.isdir(IFLOW_PATH):
         continue
 
-    iflw = None
-    for root, _, files in os.walk(path):
-        for f in files:
-            if f.endswith(".iflw"):
-                iflw = os.path.join(root, f)
+    print(f"Processing iFlow: {iflow}")
 
-    if not iflw:
-        continue
-
-    summary = groq_summary(iflow, iflw)
-
-    # MARKDOWN
-    md_path = os.path.join(path, f"{iflow}.md")
-    with open(md_path, "w", encoding="utf-8") as md:
-        md.write(summary)
-
-    # DOCX
     doc = Document()
-    add_title_page(doc, iflow)
-    add_toc(doc)
-    add_content(doc, summary)
+    title_page(doc, iflow)
+    toc_page(doc)
 
-    doc.save(os.path.join(path, f"{iflow}.docx"))
+    add_header(doc)
 
-print("✅ Documentation generated correctly")
+    content = groq(f"""
+Generate SAP CPI documentation with numbered sections:
+1. Introduction
+1.1 Purpose
+1.2 Scope
+2. Integration Overview
+2.1 Integration Architecture
+2.2 Integration Components (give sender/receiver/adapters)
+3. Integration Scenarios
+3.1 Scenario Description
+4. Error Handling and Logging
+5. Testing Validation
+6. Reference Documents
+
+No markdown symbols.
+iFlow: {iflow}
+""")
+
+    for line in content.split("\n"):
+        doc.add_paragraph(line)
+
+    out_doc = os.path.join(IFLOW_PATH, f"{iflow}.docx")
+    out_md = os.path.join(IFLOW_PATH, f"{iflow}.md")
+
+    doc.save(out_doc)
+    with open(out_md, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"Generated inside {IFLOW_PATH}")
+
+print("DONE")
