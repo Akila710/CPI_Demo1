@@ -1,28 +1,30 @@
 import os
 import requests
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches
 from datetime import date
+from docx import Document
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # ---------------- CONFIG ----------------
-BASE_DIR = "cpi-artifacts"
-PACKAGE = os.getenv("PACKAGE_NAME")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
+ARTIFACTS_DIR = "cpi-artifacts"
 SAP_LOGO = "assets/logos/SAP.jpg"
 MM_LOGO = "assets/logos/mm_logo.png"
 
-MODEL = "llama-3.3-70b-versatile"
+AUTHOR = ""          # must be blank
+VERSION = "Draft"
+TODAY = date.today().isoformat()
 
-if not PACKAGE:
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+PACKAGE_NAME = os.getenv("PACKAGE_NAME")
+
+if not PACKAGE_NAME:
     raise Exception("PACKAGE_NAME not provided")
 
-PACKAGE_PATH = os.path.join(BASE_DIR, PACKAGE)
+PACKAGE_PATH = os.path.join(ARTIFACTS_DIR, PACKAGE_NAME)
 if not os.path.isdir(PACKAGE_PATH):
     raise Exception(f"Package not found: {PACKAGE_PATH}")
 
-# ---------------- FIND IFLOWS ----------------
+# ---------------- FIND IFLOWS (CPI STRUCTURE) ----------------
 iflows = [
     d for d in os.listdir(PACKAGE_PATH)
     if os.path.isdir(os.path.join(PACKAGE_PATH, d))
@@ -31,9 +33,9 @@ iflows = [
 if not iflows:
     raise Exception(f"No iFlows found inside {PACKAGE_PATH}")
 
-print("Found iFlows:", iflows)
+print(f"Found iFlows: {iflows}")
 
-# ---------------- GROQ ----------------
+# ---------------- GROQ CALL ----------------
 def groq_summary(iflow_name):
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
@@ -42,29 +44,19 @@ def groq_summary(iflow_name):
             "Content-Type": "application/json"
         },
         json={
-            "model": MODEL,
+            "model": "llama-3.3-70b-versatile",
             "messages": [
                 {"role": "system", "content": "You are a SAP CPI Technical Architect."},
                 {"role": "user", "content": f"""
-Generate SAP CPI iFlow documentation with these sections ONLY:
-
-1. Introduction
-1.1 Purpose
-1.2 Scope
-2. Integration Overview
-2.1 Integration Architecture
-2.2 Integration Components
-3. Integration Scenarios
-3.1 Scenario Description
-3.2 Data Flows
-3.3 Security Requirements
-4. Error Handling and Logging
-5. Testing Validation
-6. Reference Documents
+Generate SAP CPI iFlow technical documentation with:
+- Purpose
+- Sender / Receiver
+- Adapters
+- Flow Logic
+- Error Handling
 
 iFlow Name: {iflow_name}
 """}
-            ]
         }
     )
     return response.json()["choices"][0]["message"]["content"]
@@ -72,6 +64,8 @@ iFlow Name: {iflow_name}
 # ---------------- PROCESS EACH IFLOW ----------------
 for iflow in iflows:
     iflow_path = os.path.join(PACKAGE_PATH, iflow)
+
+    print(f"📄 Generating docs for iFlow: {iflow}")
 
     summary = groq_summary(iflow)
 
@@ -83,35 +77,49 @@ for iflow in iflows:
     # ---------- DOCX ----------
     doc = Document()
 
-    # Header with logos
+    # ===== HEADER (LOGOS) =====
     section = doc.sections[0]
     header = section.header
-    header_para = header.paragraphs[0]
-    header_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    header_para.add_run().add_picture(SAP_LOGO, width=Inches(1))
 
-    header_para.add_run("\t\t\t")
-    header_para.add_run().add_picture(MM_LOGO, width=Inches(1))
+    header_table = header.add_table(rows=1, cols=2)
+    header_table.autofit = False
+    header_table.columns[0].width = Inches(3)
+    header_table.columns[1].width = Inches(3)
 
-    # Page 1 – Title
+    left = header_table.cell(0, 0).paragraphs[0]
+    left.add_run().add_picture(SAP_LOGO, width=Inches(1.2))
+
+    right = header_table.cell(0, 1).paragraphs[0]
+    right.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    right.add_run().add_picture(MM_LOGO, width=Inches(1.2))
+
+    # ===== TITLE =====
+    doc.add_paragraph("\n\n")
     title = doc.add_paragraph(iflow)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.runs[0].bold = True
+    run = title.runs[0]
+    run.bold = True
+    run.font.size = Pt(20)
 
-    # Author table
+    doc.add_paragraph("\n")
+
+    # ===== INFO TABLE =====
     table = doc.add_table(rows=3, cols=2)
     table.style = "Table Grid"
+
     table.cell(0, 0).text = "Author:"
-    table.cell(0, 1).text = ""
+    table.cell(0, 1).text = AUTHOR
+
     table.cell(1, 0).text = "Date:"
-    table.cell(1, 1).text = date.today().isoformat()
+    table.cell(1, 1).text = TODAY
+
     table.cell(2, 0).text = "Version:"
-    table.cell(2, 1).text = "Draft"
+    table.cell(2, 1).text = VERSION
 
+    # ===== PAGE 2: TOC =====
     doc.add_page_break()
-
-    # Page 2 – TOC (STATIC)
     doc.add_heading("Table of Contents", level=1)
+
     toc_items = [
         "1. Introduction",
         "1.1 Purpose",
@@ -120,26 +128,22 @@ for iflow in iflows:
         "2.1 Integration Architecture",
         "2.2 Integration Components",
         "3. Integration Scenarios",
-        "3.1 Scenario Description",
-        "3.2 Data Flows",
-        "3.3 Security Requirements",
         "4. Error Handling and Logging",
         "5. Testing Validation",
-        "6. Reference Documents",
+        "6. Reference Documents"
     ]
+
     for item in toc_items:
         doc.add_paragraph(item)
 
+    # ===== PAGE 3+: CONTENT =====
     doc.add_page_break()
-
-    # Page 3+ – CONTENT (SAME AS MD)
-    for line in summary.split("\n"):
-        if line.strip().startswith(("1.", "2.", "3.", "4.", "5.", "6.")):
-            doc.add_heading(line.strip(), level=1)
-        else:
-            doc.add_paragraph(line)
+    doc.add_heading("1. Introduction", level=1)
+    doc.add_paragraph(summary)
 
     docx_path = os.path.join(iflow_path, f"{iflow}.docx")
     doc.save(docx_path)
 
-    print(f"Generated docs for {iflow}")
+    print(f"✅ Created: {md_path} and {docx_path}")
+
+print("🎉 All iFlow documents generated successfully")
