@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "CPI Package Name (e.g. Demo)"
+        description: "CPI Package Name (e.g. Demo, POC2)"
         required: true
 
 jobs:
@@ -23,12 +23,14 @@ jobs:
       - name: Install dependencies
         run: |
           pip install python-docx requests
+
       - name: Generate iFlow documentation
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PACKAGE_NAME: ${{ inputs.package }}
         run: |
           python scripts/generate_docs.py
+
       - name: Commit generated docs to repo
         run: |
           git config user.name "github-actions"
