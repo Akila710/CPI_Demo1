@@ -1,12 +1,13 @@
 import os
 import requests
-from datetime import date
 from docx import Document
 from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from datetime import date
+import subprocess
 
 # ---------------- CONFIG ----------------
-BASE_DIR = "cpi-artifacts"
+ARTIFACTS_DIR = "cpi-artifacts"
 PACKAGE = os.getenv("PACKAGE_NAME")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
@@ -14,98 +15,137 @@ SAP_LOGO = "assets/logos/SAP.jpg"
 MM_LOGO = "assets/logos/mm_logo.png"
 
 TODAY = date.today().isoformat()
+VERSION = "Draft"
 
+# ---------------- VALIDATION ----------------
 if not PACKAGE:
     raise Exception("PACKAGE_NAME not provided")
 
-PACKAGE_PATH = os.path.join(BASE_DIR, PACKAGE)
-if not os.path.isdir(PACKAGE_PATH):
-    raise Exception(f"Package not found: {PACKAGE_PATH}")
+PKG_PATH = os.path.join(ARTIFACTS_DIR, PACKAGE)
+if not os.path.isdir(PKG_PATH):
+    raise Exception(f"Package not found: {PKG_PATH}")
 
 # ---------------- FIND IFLOWS ----------------
 iflows = []
-for item in os.listdir(PACKAGE_PATH):
-    p = os.path.join(PACKAGE_PATH, item)
-    if os.path.isdir(p):
-        iflows.append(item)
+for name in os.listdir(PKG_PATH):
+    iflow_path = os.path.join(PKG_PATH, name)
+    if os.path.isdir(iflow_path):
+        iflows.append(name)
 
 if not iflows:
-    raise Exception("No iFlows found")
+    raise Exception(f"No iFlows found inside {PKG_PATH}")
 
-print(f"Found iFlows: {iflows}")
+print("Found iFlows:", iflows)
 
 # ---------------- GROQ ----------------
-def groq_summary(iflow_name, content):
+def groq_generate(iflow_name, iflw_path):
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a SAP CPI Technical Architect. "
+                    "Return clean professional text only. "
+                    "Do NOT use markdown, symbols, bullets, or special characters. "
+                    "Use numbered section titles exactly as requested."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"""
+Generate content for these sections:
+
+1. Introduction
+1.1 Purpose
+1.2 Scope
+2. Integration Overview
+2.1 Integration Architecture
+2.2 Integration Components
+3. Integration Scenarios
+3.1 Scenario Description
+3.2 Data Flows
+3.3 Security Requirements
+4. Error Handling and Logging
+5. Testing Validation
+6. Reference Documents
+
+iFlow Name: {iflow_name}
+"""
+            }
+        ]
+    }
+
     r = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         },
-        json={
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": "You are a SAP CPI Technical Architect."},
-                {"role": "user", "content": f"""
-Generate SAP CPI documentation content ONLY (no markdown symbols).
-
-Provide content for:
-1. Purpose
-2. Scope
-3. Integration Architecture
-4. Integration Components (Sender, Receiver, Adapters)
-5. Integration Scenario
-6. Error Handling
-7. Testing Validation
-
-iFlow Name: {iflow_name}
-
-iFlow File Content:
-{content}
-"""}
-            ]
-        }
+        json=payload,
     )
+
     return r.json()["choices"][0]["message"]["content"]
 
-# ---------------- DOC CREATION ----------------
-def create_doc(iflow_name, summary, out_path):
+# ---------------- PROCESS EACH IFLOW ----------------
+for iflow in iflows:
+    IFLOW_DIR = os.path.join(PKG_PATH, iflow)
+    IFLOW_FILE = os.path.join(
+        IFLOW_DIR,
+        "src/main/resources/scenarioflows/integrationflow",
+        f"{iflow}.iflw"
+    )
+
+    if not os.path.exists(IFLOW_FILE):
+        print(f"⚠️ {iflow}.iflw not found, skipping")
+        continue
+
+    content = groq_generate(iflow, IFLOW_FILE)
+
+    # ---------- MARKDOWN ----------
+    md_path = os.path.join(IFLOW_DIR, f"{iflow}.md")
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    # ---------- DOCX ----------
     doc = Document()
 
-    # ---------- HEADER ----------
+    # Header (logos on every page)
     section = doc.sections[0]
     header = section.header
-    table = header.add_table(rows=1, cols=2, width=Inches(6))
-    table.cell(0,0).paragraphs[0].add_run().add_picture(SAP_LOGO, width=Inches(1))
-    table.cell(0,1).paragraphs[0].add_run().add_picture(MM_LOGO, width=Inches(1))
-    table.cell(0,1).paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p = header.paragraphs[0]
+    p.clear()
 
-    # ---------- PAGE 1 ----------
-    title = doc.add_paragraph(iflow_name)
+    p.add_run().add_picture(SAP_LOGO, width=Inches(1))
+    p.add_run("\t" * 6)
+    p.add_run().add_picture(MM_LOGO, width=Inches(1))
+
+    # ---------- COVER PAGE ----------
+    doc.add_paragraph("\n\n")
+    title = doc.add_paragraph(iflow)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     title.runs[0].bold = True
-    title.runs[0].font.size = Pt(22)
+    title.runs[0].font.size = Pt(20)
 
     doc.add_paragraph("\n")
 
-    meta = doc.add_table(rows=3, cols=2)
-    meta.style = "Table Grid"
-    meta.cell(0,0).text = "Author:"
-    meta.cell(0,1).text = ""
-    meta.cell(1,0).text = "Date:"
-    meta.cell(1,1).text = TODAY
-    meta.cell(2,0).text = "Version:"
-    meta.cell(2,1).text = "Draft"
+    table = doc.add_table(rows=3, cols=2)
+    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-    for row in meta.rows:
-        for cell in row.cells:
-            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+    table.cell(0, 0).text = "Author:"
+    table.cell(0, 1).text = ""
+    table.cell(1, 0).text = "Date:"
+    table.cell(1, 1).text = TODAY
+    table.cell(2, 0).text = "Version:"
+    table.cell(2, 1).text = VERSION
 
     doc.add_page_break()
 
-    # ---------- PAGE 2: TOC ----------
-    doc.add_heading("Table of Contents", level=1)
-    toc = [
+    # ---------- TOC PAGE ----------
+    toc = doc.add_heading("Table of Contents", level=1)
+    toc.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    toc_items = [
         "1. Introduction",
         "   1.1 Purpose",
         "   1.2 Scope",
@@ -113,48 +153,34 @@ def create_doc(iflow_name, summary, out_path):
         "   2.1 Integration Architecture",
         "   2.2 Integration Components",
         "3. Integration Scenarios",
+        "   3.1 Scenario Description",
+        "   3.2 Data Flows",
+        "   3.3 Security Requirements",
         "4. Error Handling and Logging",
         "5. Testing Validation",
-        "6. Reference Documents"
+        "6. Reference Documents",
     ]
-    for t in toc:
-        doc.add_paragraph(t)
+
+    for i in toc_items:
+        doc.add_paragraph(i)
 
     doc.add_page_break()
 
-    # ---------- PAGE 3+: CONTENT ----------
-    doc.add_heading("1. Introduction", level=1)
-    doc.add_heading("1.1 Purpose", level=2)
-    doc.add_paragraph(summary)
+    # ---------- CONTENT ----------
+    for line in content.split("\n"):
+        if line.strip().startswith(tuple(str(i) for i in range(1, 7))):
+            doc.add_heading(line.strip(), level=1)
+        else:
+            doc.add_paragraph(line)
 
-    doc.save(out_path)
+    docx_path = os.path.join(IFLOW_DIR, f"{iflow}.docx")
+    doc.save(docx_path)
 
-# ---------------- PROCESS EACH IFLOW ----------------
-for iflow in iflows:
-    iflow_dir = os.path.join(PACKAGE_PATH, iflow)
-    iflw_file = None
+    print(f"✅ Generated docs for {iflow}")
 
-    for root, _, files in os.walk(iflow_dir):
-        for f in files:
-            if f.endswith(".iflw"):
-                iflw_file = os.path.join(root, f)
-
-    if not iflw_file:
-        print(f"⚠️ No .iflw found in {iflow}, skipping")
-        continue
-
-    content = open(iflw_file, encoding="utf-8", errors="ignore").read()
-    summary = groq_summary(iflow, content)
-
-    # MD
-    md_path = os.path.join(iflow_dir, f"{iflow}.md")
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(summary)
-
-    # DOCX
-    docx_path = os.path.join(iflow_dir, f"{iflow}.docx")
-    create_doc(iflow, summary, docx_path)
-
-    print(f"✅ Generated for {iflow}")
-
-print("🎉 All documents generated inside iFlow folders")
+# ---------------- COMMIT BACK ----------------
+subprocess.run(["git", "config", "user.name", "github-actions"])
+subprocess.run(["git", "config", "user.email", "actions@github.com"])
+subprocess.run(["git", "add", ARTIFACTS_DIR])
+subprocess.run(["git", "commit", "-m", "Auto-generate iFlow documentation"])
+subprocess.run(["git", "push"])
