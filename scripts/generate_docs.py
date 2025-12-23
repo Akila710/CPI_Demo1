@@ -98,17 +98,26 @@ iFlow Content:
 # ================= DOC HELPERS =================
 def add_header(section):
     header = section.header
-    header.paragraphs.clear()
 
-    p = header.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    run = p.add_run()
-    run.add_picture(SAP_LOGO, width=Inches(1.1))
+    # Clear existing header content
+    for p in header.paragraphs:
+        p.clear()
 
-    #p = header.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = p.add_run()
-    run.add_picture(MM_LOGO, width=Inches(1.1))
+    # Create a table with 1 row and 2 columns
+    table = header.add_table(rows=1, cols=2, width=Inches(6.5))
+    table.autofit = False
+
+    # Left cell – SAP logo
+    left_cell = table.cell(0, 0)
+    left_para = left_cell.paragraphs[0]
+    left_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    left_para.add_run().add_picture(SAP_LOGO, width=Inches(1.2))
+
+    # Right cell – motiveminds logo
+    right_cell = table.cell(0, 1)
+    right_para = right_cell.paragraphs[0]
+    right_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    right_para.add_run().add_picture(MM_LOGO, width=Inches(1.2))
 
 def add_toc_page(doc):
     p = doc.add_paragraph("Table of Contents")
