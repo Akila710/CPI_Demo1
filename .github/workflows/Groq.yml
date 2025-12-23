@@ -1,10 +1,10 @@
-name: Generate CPI iFlow Documentation (Groq)
+name: Generate CPI iFlow Docs (Groq)
 
 on:
   workflow_dispatch:
     inputs:
       package:
-        description: "CPI Package Name (folder under cpi-artifacts)"
+        description: "CPI Package Name (under cpi-artifacts)"
         required: true
 
 jobs:
@@ -14,8 +14,6 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -33,10 +31,10 @@ jobs:
         run: |
           python scripts/generate_docs.py
 
-      - name: Commit generated documents
+      - name: Commit generated docs
         run: |
           git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add cpi-artifacts/
-          git commit -m "Auto-generate CPI iFlow documentation" || echo "Nothing to commit"
+          git config user.email "actions@github.com"
+          git add cpi-artifacts
+          git commit -m "Auto-generate iFlow documentation"
           git push
