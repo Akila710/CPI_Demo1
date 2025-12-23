@@ -105,7 +105,7 @@ def add_header(section):
     run = p.add_run()
     run.add_picture(SAP_LOGO, width=Inches(1.1))
 
-    p = header.add_paragraph()
+    #p = header.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     run = p.add_run()
     run.add_picture(MM_LOGO, width=Inches(1.1))
