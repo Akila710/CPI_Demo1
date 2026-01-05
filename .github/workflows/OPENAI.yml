@@ -114,7 +114,7 @@ jobs:
               DATE=$(date +'%Y-%m-%d')
               CLEAN_NAME=$(echo "$IFLOW_ROOT_NAME" | sed 's/_/ /g')
  
-              SAP_LOGO="https://github.com/Akila710/CPI_Demo1/blob/main/assets/logos/SAP.jpg"
+              SAP_LOGO="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/sap_logo.png"
               MM_LOGO="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/motiveminds_logo.png"
               # MODIFIED: SAP Logo reduced to 140px
               LOGO_HEADER="<div style=\"width:100%; height: 60px; margin-bottom: 20px;\"><div style=\"float: left;\"><img src=\"$SAP_LOGO\" style=\"width: 140px; height: auto;\"/></div><div style=\"float: right;\"><img src=\"$MM_LOGO\" style=\"width: 150px; height: auto;\"/></div><div style=\"clear: both;\"></div></div>"
