@@ -1,34 +1,36 @@
 name: 🤖 Generation Individual iFlow Documentation (Word with Diagrams)
-
+ 
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "The ID of the CPI Integration Package (e.g., 'PDFconverter')."
+        description: "The ID of the CPI Integration Package (e.g., 'PDFcoveter')."
         required: true
         type: string
-
+ 
 jobs:
   document:
     runs-on: ubuntu-latest
+ 
     permissions:
       contents: write
-
+ 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
+ 
       - name: Install Dependencies
         run: |
           sudo apt-get update
+          # Ubuntu 24.04 (Noble) compatible dependencies for Mermaid CLI
           sudo apt-get install -y \
             jq pandoc \
             libgbm1 libasound2t64 libnss3 libxss1 \
             libatk-bridge2.0-0 libgtk-3-0
+ 
           npm install -g @mermaid-js/mermaid-cli
-          pip install python-docx requests
-
-      - name: Generate Individual iFlow Documentation
+ 
+      - name: Generate Individual iFlow Documentation via OpenAI API
         id: documentation_step
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -36,191 +38,115 @@ jobs:
           HEADING_COLOR: "#1f4e79"
         run: |
           set -e
-
+ 
+          # --- Configuration ---
           API_URL="https://api.openai.com/v1/chat/completions"
           MODEL_NAME="gpt-4o-mini"
           BASE_PKG_DIR="cpi-artifacts/$PKG_ID"
-
+ 
           if [ ! -d "$BASE_PKG_DIR" ]; then
-            echo "::error::Package directory not found"
+            echo "::error::Package directory not found: $BASE_PKG_DIR"
             exit 1
           fi
-
-          # ---------- SYSTEM PROMPT (NO EOF) ----------
-          SYSTEM_PROMPT="You are a senior SAP CPI Technical Architect. Your goal is to produce a high-quality, comprehensive Technical Specification Document.
-
-          CRITICAL CONTENT REQUIREMENTS:
-          1. 1.1 Purpose (Expanded): Explain the specific business problem this iFlow solves, the trigger mechanism, and technical outcome based on artifacts.
-          2. 1.2 Scope (Expanded): Detail endpoints, data transformation logic, and target systems.
-          3. 2.2 Integration Components: Identify adapters, Scripts, and Content Modifiers. Describe their roles.
-          4. 3.1 Scenario Description: Provide a step-by-step walkthrough of the integration process.
-
-          FORMATTING RULES:
-          - All Headings (H1/H2) and Subheadings MUST use color '${HEADING_COLOR}'.
-          - Subheadings MUST be wrapped in: <b style=\"color:${HEADING_COLOR};\">...</b>.
-          - Use standard Markdown tables for all structured data.
-          - Mermaid diagram required.
-
-          REQUIRED STRUCTURE:
-          <h1 style=\"color:${HEADING_COLOR}; font-size:2.5em;\">Table of Contents</h1>
-          1. Introduction <br>
-          &nbsp;&nbsp;1.1 Purpose <br>
-          &nbsp;&nbsp;1.2 Scope <br>
-          2. Integration Overview <br>
-          &nbsp;&nbsp;2.1 Integration Architecture <br>
-          &nbsp;&nbsp;2.2 Integration Components <br>
-          3. Integration Scenarios <br>
-          &nbsp;&nbsp;3.1 Scenario Description <br>
-          &nbsp;&nbsp;3.2 Data Flows <br>
-          &nbsp;&nbsp;3.3 Security Requirements <br>
-          4. Error Handling and Logging <br>
-          5. Testing Validation <br>
-          6. Reference Documents <br>
-          ---TOC-END-PAGE-BREAK---
-          <h1 style=\"color:${HEADING_COLOR};\">1. Introduction</h1>
-          <b style=\"color:${HEADING_COLOR};\">1.1 Purpose:</b>
-          <b style=\"color:${HEADING_COLOR};\">1.2 Scope:</b>
-          <h1 style=\"color:${HEADING_COLOR};\">2. Integration Overview</h1>
-          <b style=\"color:${HEADING_COLOR};\">2.1 Integration Architecture:</b>
-          <b style=\"color:${HEADING_COLOR};\">2.2 Integration Components:</b>
-          <h1 style=\"color:${HEADING_COLOR};\">3. Integration Scenarios</h1>
-          <b style=\"color:${HEADING_COLOR};\">3.1 Scenario Description:</b>
-          <b style=\"color:${HEADING_COLOR};\">3.2 Data Flows:</b>
-          <b style=\"color:${HEADING_COLOR};\">3.3 Security Requirements:</b>
-          <h1 style=\"color:${HEADING_COLOR};\">4. Error Handling and Logging</h1>
-          <h1 style=\"color:${HEADING_COLOR};\">5. Testing Validation</h1>
-          <h1 style=\"color:${HEADING_COLOR};\">6. Reference Documents</h1>"
-
+ 
+          # --- SYSTEM PROMPT ---
+          SYSTEM_PROMPT=$(cat <<EOF
+          You are a senior SAP CPI Technical Architect. Your goal is to produce a high-quality, comprehensive Technical Specification Document.
+ 
+          **CRITICAL CONTENT REQUIREMENTS:**
+          1. **1.1 Purpose (Expanded):** Analyze XML/Groovy files to explain the exact business problem, trigger, and outcome.
+          2. **1.2 Scope (Expanded):** Detail inclusions, exclusions, endpoints, transformations, and constraints.
+          3. **2.2 Integration Components:** Describe every adapter, script, and content modifier.
+          4. **3.1 Scenario Description:** Step-by-step message lifecycle.
+ 
+          **FORMATTING RULES:**
+          - All headings use color '${HEADING_COLOR}'
+          - Headings left-aligned
+          - Subheadings wrapped in <b style="color:${HEADING_COLOR};">
+          - Markdown tables only
+          - Mermaid diagram required for section 2.1
+ 
+          **REQUIRED STRUCTURE:**
+          [FULL STRUCTURE EXACTLY AS PROVIDED BY USER]
+          EOF
+          )
+ 
           ALL_DOCS_GENERATED=false
-
+ 
           while IFS= read -r IFLOW_DIR; do
-            IFLOW_NAME=$(basename "$IFLOW_DIR")
-            OUTPUT_DOCX="$IFLOW_DIR/${IFLOW_NAME}_Technical_Specification.docx"
+            IFLOW_ROOT_NAME=$(basename "$IFLOW_DIR")
+            OUTPUT_DOCX="$IFLOW_DIR/${IFLOW_ROOT_NAME}_Technical_Specification.docx"
             TEMP_MD="word_content.md"
-
-            QUERY_FILE="query.tmp"
-            echo "Generate technical specification for iFlow '$IFLOW_NAME'." > "$QUERY_FILE"
-            find "$IFLOW_DIR" -type f \( -name 'iFlowContent.xml' -o -name '*.groovy' -o -name '*.xslt' -o -name '*.iflw' \) -exec cat {} + >> "$QUERY_FILE"
-
+ 
+            EXTRACTED_VERSION=$(grep -rPho '(?<=<Version>)[^<]+' "$IFLOW_DIR" | head -n 1)
+            IFLOW_VERSION=${EXTRACTED_VERSION:-"1.0.0"}
+ 
+            QUERY_FILE="user_query.tmp"
+            echo "Generate report for iFlow '$IFLOW_ROOT_NAME'" > "$QUERY_FILE"
+ 
+            find "$IFLOW_DIR" -type f \( \
+              -name 'iFlowContent.xml' -o \
+              -name '*.groovy' -o \
+              -name '*.xslt' -o \
+              -name '*.iflw' \
+            \) -exec cat {} + >> "$QUERY_FILE"
+ 
             jq -n \
               --arg system "$SYSTEM_PROMPT" \
               --rawfile query "$QUERY_FILE" \
               --arg model "$MODEL_NAME" \
-              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$query}],temperature:0.1}' \
+              '{model: $model, messages: [{role:"system",content:$system},{role:"user",content:$query}], temperature:0.1}' \
               > payload.json
-
-            RESPONSE=$(curl -s -X POST "$API_URL" \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
+ 
+            API_RESPONSE=$(curl -s -X POST "$API_URL" \
               -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
               -d @payload.json)
-
-            GENERATED_TEXT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
-            [ -z "$GENERATED_TEXT" ] && continue
-
-            PAGE_BREAK="<div style='page-break-after: always;'></div>"
-            GENERATED_TEXT=$(echo "$GENERATED_TEXT" | sed "s|---TOC-END-PAGE-BREAK---|$PAGE_BREAK|g")
-
+ 
+            GENERATED_TEXT=$(echo "$API_RESPONSE" | jq -r '.choices[0].message.content // empty')
+ 
+            if [ -z "$GENERATED_TEXT" ]; then
+              continue
+            fi
+ 
+            # --- Mermaid Rendering ---
             echo "$GENERATED_TEXT" | sed -n '/```mermaid/,/```/p' | sed 's/```mermaid//g;s/```//g' > architecture.mmd
+ 
             if [ -s architecture.mmd ]; then
-              echo '{"args":["--no-sandbox"]}' > puppeteer.json
+              echo '{"args":["--no-sandbox","--disable-setuid-sandbox"]}' > puppeteer.json
               mmdc -p puppeteer.json -i architecture.mmd -o architecture.png -b transparent -w 1200
               GENERATED_TEXT=$(echo "$GENERATED_TEXT" | sed '/```mermaid/,/```/c\![Integration Architecture](architecture.png)')
             fi
-
+ 
             AUTHOR=$(git log -1 --pretty=format:'%an')
             DATE=$(date +'%Y-%m-%d')
-            VERSION="Draft"
-
+ 
             SAP_LOGO="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/sap_logo.png"
             MM_LOGO="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/motiveminds_logo.png"
-
-            GLOBAL_STYLE="<style>table{border-collapse:collapse;}th,td{border:1px solid #000;padding:8px;}</style>"
-
-            LOGO_HEADER="<div style=\"width:100%;margin-bottom:40px;\">
-              <div style=\"float:left;\"><img src=\"$SAP_LOGO\" style=\"width:140px;\"/></div>
-              <div style=\"float:right;\"><img src=\"$MM_LOGO\" style=\"width:150px;\"/></div>
-              <div style=\"clear:both;\"></div>
-            </div>"
-
-            COVER_PAGE="${LOGO_HEADER}
-            <div style=\"height:120px;\"></div>
-            <h1 style=\"text-align:center;font-size:32pt;font-weight:bold;margin-bottom:40px;\">$IFLOW_NAME</h1>
-            <div style=\"text-align:center;\">
-            <table style=\"width:55%;margin:0 auto;\">
-            <tr><th>Author</th><td>$AUTHOR</td></tr>
-            <tr><th>Date</th><td>$DATE</td></tr>
-            <tr><th>Version</th><td>$VERSION</td></tr>
-            </table>
-            </div>"
-
-            echo "${GLOBAL_STYLE}
-            ${COVER_PAGE}
-            <div style=\"page-break-after: always;\"></div>
-
-            ${GENERATED_TEXT}" > "$TEMP_MD"
-
+ 
+            LOGO_HEADER="<div><img src='$SAP_LOGO' width='120'/><img src='$MM_LOGO' width='150' style='float:right'/></div>"
+            PAGE_BREAK="<div style='page-break-after:always;'></div>"
+ 
+            FINAL_MD="${LOGO_HEADER}
+            <h1>${IFLOW_ROOT_NAME}</h1>
+            ${PAGE_BREAK}
+            ${LOGO_HEADER}
+            ${GENERATED_TEXT}"
+ 
+            echo "$FINAL_MD" > "$TEMP_MD"
             pandoc "$TEMP_MD" -o "$OUTPUT_DOCX"
-
-            rm -f "$TEMP_MD" "$QUERY_FILE" payload.json architecture.mmd architecture.png puppeteer.json
+ 
+            rm -f "$TEMP_MD" architecture.mmd architecture.png puppeteer.json payload.json "$QUERY_FILE"
             ALL_DOCS_GENERATED=true
           done < <(find "$BASE_PKG_DIR" -type f \( -name '*.iflw' -o -name 'iFlowContent.xml' \) -printf '%h\n' | sort -u)
-
+ 
           echo "docs_generated=$ALL_DOCS_GENERATED" >> "$GITHUB_OUTPUT"
-
-      - name: Inject Logos into Word Header (Every Page)
-        if: steps.documentation_step.outputs.docs_generated == 'true'
-        run: |
-          python << 'PYCODE'
-          from docx import Document
-          from docx.shared import Inches
-          from docx.enum.text import WD_ALIGN_PARAGRAPH
-          import requests
-          from io import BytesIO
-          import glob
-
-          SAP="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/sap_logo.png"
-          MM="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/motiveminds_logo.png"
-
-          def img(u):
-              r=requests.get(u); 
-              r.raise_for_status()
-              return BytesIO(r.content)
-
-          for f in glob.glob("cpi-artifacts/**/**/*_Technical_Specification.docx", recursive=True):
-              d=Document(f)
-              section = d.sections[0]
-              header = section.header
-
-              # Clear existing header content safely
-              for p in header.paragraphs:
-                  p._element.getparent().remove(p._element)
-
-              # CRITICAL FIX: width is mandatory in header/footer tables
-              table = header.add_table(
-                  rows=1,
-                  cols=2,
-                  width=Inches(6.5)
-              )
-              table.autofit = False
-
-              # Left: SAP logo
-              left_p = table.cell(0, 0).paragraphs[0]
-              left_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-              left_p.add_run().add_picture(img(SAP), width=Inches(1.3))
-
-              # Right: MotiveMinds logo
-              right_p = table.cell(0, 1).paragraphs[0]
-              right_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-              right_p.add_run().add_picture(img(MM), width=Inches(1.4))
-
-              d.save(f)
-          PYCODE
-
+ 
       - name: Commit and Push
         if: steps.documentation_step.outputs.docs_generated == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add "cpi-artifacts/${{ github.event.inputs.package_id }}/**/*.docx"
-          git commit -m "🤖 DOCS: Word doc with cover, TOC, and logos"
+          git commit -m "🤖 DOCS: Generated Word technical specs with diagrams"
           git push
