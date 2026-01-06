@@ -16,7 +16,7 @@ jobs:
 
     steps:
       # ------------------------------------------------------------
-      # 1️⃣ Checkout
+      # 1️⃣ Checkout repository
       # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,11 +36,14 @@ jobs:
         run: |
           mkdir -p pdf_assets
 
+          # ✅ USE RAW GITHUB IMAGE URLS (CRITICAL FIX)
+          SAP_LOGO="https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/SAP.jpg"
+          MM_LOGO="https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/mm_logo.png"
+
           # ==========================================================
-          # HEADER HTML (FULL HTML – REQUIRED BY wkhtmltopdf)
-          # LOGOS REPEAT ON EVERY PAGE
+          # HEADER HTML (FULL HTML — REPEATS ON EVERY PAGE)
           # ==========================================================
-          cat <<'EOF' > pdf_assets/header.html
+          cat <<EOF > pdf_assets/header.html
           <!DOCTYPE html>
           <html>
           <head>
@@ -64,10 +67,10 @@ jobs:
             <table>
               <tr>
                 <td align="left">
-                  <img src="assets/logos/SAP.jpg">
+                  <img src="${SAP_LOGO}">
                 </td>
                 <td align="right">
-                  <img src="assets/logos/mm_logo.png">
+                  <img src="${MM_LOGO}">
                 </td>
               </tr>
             </table>
@@ -155,7 +158,6 @@ jobs:
             # Convert to PDF (HEADER ON EVERY PAGE)
             # ------------------------------------------------------
             wkhtmltopdf \
-              --enable-local-file-access \
               --header-html pdf_assets/header.html \
               --header-spacing 5 \
               --margin-top 30mm \
