@@ -182,21 +182,39 @@ jobs:
           MM="https://raw.githubusercontent.com/Rohancherian783/trail1/main/assets/motiveminds_logo.png"
 
           def img(u):
-              r=requests.get(u); r.raise_for_status()
+              r=requests.get(u); 
+              r.raise_for_status()
               return BytesIO(r.content)
 
           for f in glob.glob("cpi-artifacts/**/**/*_Technical_Specification.docx", recursive=True):
               d=Document(f)
-              h=d.sections[0].header
-              h.paragraphs.clear()
-              t=h.add_table(1,2)
-              t.autofit=True
-              t.cell(0,0).paragraphs[0].alignment=WD_ALIGN_PARAGRAPH.LEFT
-              t.cell(0,0).paragraphs[0].add_run().add_picture(img(SAP), width=Inches(1.3))
-              t.cell(0,1).paragraphs[0].alignment=WD_ALIGN_PARAGRAPH.RIGHT
-              t.cell(0,1).paragraphs[0].add_run().add_picture(img(MM), width=Inches(1.4))
+              section = d.sections[0]
+              header = section.header
+
+              # Clear existing header content safely
+              for p in header.paragraphs:
+              p._element.getparent().remove(p._element)
+
+              # CRITICAL FIX: width is mandatory in header/footer tables
+              table = header.add_table(
+                  rows=1,
+                  cols=2,
+                  width=Inches(6.5)
+              )
+              table.autofit = False
+
+              # Left: SAP logo
+              left_p = table.cell(0, 0).paragraphs[0]
+              left_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+              left_p.add_run().add_picture(img(SAP), width=Inches(1.3))
+
+              # Right: MotiveMinds logo
+              right_p = table.cell(0, 1).paragraphs[0]
+              right_p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+              right_p.add_run().add_picture(img(MM), width=Inches(1.4))
+
               d.save(f)
-          PYCODE
+              PYCODE
 
       - name: Commit and Push
         if: steps.documentation_step.outputs.docs_generated == 'true'
