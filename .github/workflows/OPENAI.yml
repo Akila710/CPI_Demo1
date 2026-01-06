@@ -22,7 +22,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ------------------------------------------------------------
-      # 2️⃣ Install dependencies (LaTeX FIXED)
+      # 2️⃣ Install Dependencies (NO LaTeX)
       # ------------------------------------------------------------
       - name: Install Dependencies
         run: |
@@ -30,58 +30,42 @@ jobs:
           sudo apt-get install -y \
             jq \
             pandoc \
-            texlive-latex-extra
+            wkhtmltopdf
 
       # ------------------------------------------------------------
-      # 3️⃣ Create INLINE HTML + CSS assets
+      # 3️⃣ Create INLINE HTML + CSS
       # ------------------------------------------------------------
-      - name: Create Pandoc Assets
+      - name: Create HTML Assets
         run: |
-          mkdir -p pandoc_assets
+          mkdir -p pdf_assets
 
-          # ---------- HEADER (logos on EVERY page) ----------
-          cat <<'EOF' > pandoc_assets/header.html
-          <style>
-          @page {
-            margin-top: 100px;
-          }
-          header {
-            position: fixed;
-            top: -80px;
-            left: 0;
-            right: 0;
-            height: 70px;
-          }
-          header img {
-            height: 45px;
-          }
-          </style>
-
-          <header>
+          # ---------- HEADER (repeated on every page) ----------
+          cat <<'EOF' > pdf_assets/header.html
+          <div style="width:100%; font-size:12px;">
             <table width="100%">
               <tr>
                 <td align="left">
-                  <img src="assets/logos/SAP.jpg">
+                  <img src="assets/logos/SAP.jpg" height="40">
                 </td>
                 <td align="right">
-                  <img src="assets/logos/motiveminds_logo.png">
+                  <img src="assets/logos/motiveminds_logo.png" height="40">
                 </td>
               </tr>
             </table>
-          </header>
+            <hr/>
+          </div>
           EOF
 
-          # ---------- COVER PAGE (PAGE 1) ----------
-          cat <<'EOF' > pandoc_assets/cover.html
-          <!DOCTYPE html>
+          # ---------- COVER PAGE ----------
+          cat <<'EOF' > pdf_assets/cover.html
           <html>
           <body>
           <div style="text-align:center; margin-top:200px;">
             <h1 style="font-size:42px;">{{IFLOW_NAME}}</h1>
-            <h2 style="font-weight:normal;">Technical Specification Document</h2>
+            <h2>Technical Specification Document</h2>
 
-            <div style="margin-top:120px; display:flex; justify-content:center;">
-              <table border="1" cellpadding="8" cellspacing="0" width="60%">
+            <div style="margin-top:120px;">
+              <table border="1" cellpadding="8" cellspacing="0" align="center" width="60%">
                 <tr><th align="left">Author</th><td>{{AUTHOR}}</td></tr>
                 <tr><th align="left">Date</th><td>{{DATE}}</td></tr>
                 <tr><th align="left">Version</th><td>{{VERSION}}</td></tr>
@@ -89,23 +73,13 @@ jobs:
             </div>
           </div>
 
-          <div style="page-break-after: always;"></div>
+          <div style="page-break-after:always;"></div>
           </body>
           </html>
           EOF
 
-          # ---------- TOC CSS (PAGE 2 only) ----------
-          cat <<'EOF' > pandoc_assets/toc.css
-          #TOC {
-            page-break-after: always;
-          }
-          #TOC h1 {
-            font-size: 28px;
-          }
-          EOF
-
       # ------------------------------------------------------------
-      # 4️⃣ Generate PDF
+      # 4️⃣ Generate PDF (HTML → wkhtmltopdf)
       # ------------------------------------------------------------
       - name: Generate PDF Documentation
         env:
@@ -118,8 +92,6 @@ jobs:
           MODEL_NAME="gpt-4o-mini"
           BASE_DIR="cpi-artifacts/$PKG_ID"
 
-          [ -d "$BASE_DIR" ] || { echo "::error::Package not found"; exit 1; }
-
           for IFLOW_DIR in "$BASE_DIR"/*; do
             IFLOW_NAME=$(basename "$IFLOW_DIR")
             OUTPUT_PDF="$IFLOW_DIR/${IFLOW_NAME}.pdf"
@@ -128,12 +100,12 @@ jobs:
             DATE=$(date +%Y-%m-%d)
             VERSION="1.0"
 
-            # ---------- OpenAI payload (STRICT HTML ONLY) ----------
+            # ---------- OpenAI request (HTML ONLY) ----------
             jq -n \
               --arg model "$MODEL_NAME" \
-              --arg system "Generate STRICTLY VALID HTML. NO markdown. NO backticks. Use only h1,h2,h3,p,ul,li,table,tr,td,th. No logos. No CSS." \
+              --arg system "Generate STRICT HTML only. No markdown. No backticks." \
               --arg user "Generate technical documentation for iFlow $IFLOW_NAME." \
-              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$user}],temperature:0.1}' \
+              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$user}]}' \
               > payload.json
 
             RESPONSE=$(curl -s \
@@ -141,49 +113,31 @@ jobs:
               -H "Content-Type: application/json" \
               -d @payload.json "$API_URL")
 
-            # ---------- SAFE HTML WRAPPER ----------
-            cat <<'EOF' > content.html
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-          </head>
-          <body>
-          EOF
-
-            echo "$RESPONSE" | jq -r '.choices[0].message.content' >> content.html
-
-            cat <<'EOF' >> content.html
-          </body>
-          </html>
-          EOF
-
-            # ---------- Prepare cover ----------
+            # ---------- Build full HTML ----------
             sed -e "s/{{IFLOW_NAME}}/$IFLOW_NAME/" \
                 -e "s/{{AUTHOR}}/$AUTHOR/" \
                 -e "s/{{DATE}}/$DATE/" \
                 -e "s/{{VERSION}}/$VERSION/" \
-                pandoc_assets/cover.html > cover_final.html
+                pdf_assets/cover.html > final.html
 
-            # ---------- Build FINAL PDF ----------
-            pandoc cover_final.html content.html \
-              --from=html \
-              --toc \
-              --toc-depth=3 \
-              --include-in-header pandoc_assets/header.html \
-              --css pandoc_assets/toc.css \
-              -o "$OUTPUT_PDF"
+            echo "$RESPONSE" | jq -r '.choices[0].message.content' >> final.html
 
-            rm -f payload.json content.html cover_final.html
+            # ---------- Convert to PDF (NO LaTeX) ----------
+            wkhtmltopdf \
+              --header-html pdf_assets/header.html \
+              --margin-top 25mm \
+              final.html "$OUTPUT_PDF"
+
+            rm -f payload.json final.html
           done
 
       # ------------------------------------------------------------
-      # 5️⃣ Commit & Push PDFs
+      # 5️⃣ Commit & Push
       # ------------------------------------------------------------
       - name: Commit and Push PDFs
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add cpi-artifacts/${{ github.event.inputs.package_id }}/*.pdf
-          git commit -m "🤖 DOCS: PDF with cover, TOC, repeating logos"
+          git commit -m "🤖 DOCS: Stable PDF via wkhtmltopdf"
           git push
