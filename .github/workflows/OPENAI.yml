@@ -55,41 +55,41 @@ jobs:
           3. 2.2 Integration Components: Identify adapters, Scripts, and Content Modifiers. Describe their roles.
           4. 3.1 Scenario Description: Provide a step-by-step walkthrough of the integration process.
 
-         FORMATTING RULES:
-        - All Headings (H1/H2) and Subheadings MUST use color '${HEADING_COLOR}'.
-        - Subheadings MUST be wrapped in: <b style=\"color:${HEADING_COLOR};\">...</b>.
-        - Use standard Markdown tables for all structured data.
-        - Mermaid diagram required.
+          FORMATTING RULES:
+          - All Headings (H1/H2) and Subheadings MUST use color '${HEADING_COLOR}'.
+          - Subheadings MUST be wrapped in: <b style=\"color:${HEADING_COLOR};\">...</b>.
+          - Use standard Markdown tables for all structured data.
+          - Mermaid diagram required.
 
-         REQUIRED STRUCTURE:
-         <h1 style=\"color:${HEADING_COLOR}; font-size:2.5em;\">Table of Contents</h1>
-1. Introduction <br>
-&nbsp;&nbsp;1.1 Purpose <br>
-&nbsp;&nbsp;1.2 Scope <br>
-2. Integration Overview <br>
-&nbsp;&nbsp;2.1 Integration Architecture <br>
-&nbsp;&nbsp;2.2 Integration Components <br>
-3. Integration Scenarios <br>
-&nbsp;&nbsp;3.1 Scenario Description <br>
-&nbsp;&nbsp;3.2 Data Flows <br>
-&nbsp;&nbsp;3.3 Security Requirements <br>
-4. Error Handling and Logging <br>
-5. Testing Validation <br>
-6. Reference Documents <br>
----TOC-END-PAGE-BREAK---
-<h1 style=\"color:${HEADING_COLOR};\">1. Introduction</h1>
-<b style=\"color:${HEADING_COLOR};\">1.1 Purpose:</b>
-<b style=\"color:${HEADING_COLOR};\">1.2 Scope:</b>
-<h1 style=\"color:${HEADING_COLOR};\">2. Integration Overview</h1>
-<b style=\"color:${HEADING_COLOR};\">2.1 Integration Architecture:</b>
-<b style=\"color:${HEADING_COLOR};\">2.2 Integration Components:</b>
-<h1 style=\"color:${HEADING_COLOR};\">3. Integration Scenarios</h1>
-<b style=\"color:${HEADING_COLOR};\">3.1 Scenario Description:</b>
-<b style=\"color:${HEADING_COLOR};\">3.2 Data Flows:</b>
-<b style=\"color:${HEADING_COLOR};\">3.3 Security Requirements:</b>
-<h1 style=\"color:${HEADING_COLOR};\">4. Error Handling and Logging</h1>
-<h1 style=\"color:${HEADING_COLOR};\">5. Testing Validation</h1>
-<h1 style=\"color:${HEADING_COLOR};\">6. Reference Documents</h1>"
+          REQUIRED STRUCTURE:
+          <h1 style=\"color:${HEADING_COLOR}; font-size:2.5em;\">Table of Contents</h1>
+          1. Introduction <br>
+          &nbsp;&nbsp;1.1 Purpose <br>
+          &nbsp;&nbsp;1.2 Scope <br>
+          2. Integration Overview <br>
+          &nbsp;&nbsp;2.1 Integration Architecture <br>
+          &nbsp;&nbsp;2.2 Integration Components <br>
+          3. Integration Scenarios <br>
+          &nbsp;&nbsp;3.1 Scenario Description <br>
+          &nbsp;&nbsp;3.2 Data Flows <br>
+          &nbsp;&nbsp;3.3 Security Requirements <br>
+          4. Error Handling and Logging <br>
+          5. Testing Validation <br>
+          6. Reference Documents <br>
+          ---TOC-END-PAGE-BREAK---
+          <h1 style=\"color:${HEADING_COLOR};\">1. Introduction</h1>
+          <b style=\"color:${HEADING_COLOR};\">1.1 Purpose:</b>
+          <b style=\"color:${HEADING_COLOR};\">1.2 Scope:</b>
+          <h1 style=\"color:${HEADING_COLOR};\">2. Integration Overview</h1>
+          <b style=\"color:${HEADING_COLOR};\">2.1 Integration Architecture:</b>
+          <b style=\"color:${HEADING_COLOR};\">2.2 Integration Components:</b>
+          <h1 style=\"color:${HEADING_COLOR};\">3. Integration Scenarios</h1>
+          <b style=\"color:${HEADING_COLOR};\">3.1 Scenario Description:</b>
+          <b style=\"color:${HEADING_COLOR};\">3.2 Data Flows:</b>
+          <b style=\"color:${HEADING_COLOR};\">3.3 Security Requirements:</b>
+          <h1 style=\"color:${HEADING_COLOR};\">4. Error Handling and Logging</h1>
+          <h1 style=\"color:${HEADING_COLOR};\">5. Testing Validation</h1>
+          <h1 style=\"color:${HEADING_COLOR};\">6. Reference Documents</h1>"
 
           ALL_DOCS_GENERATED=false
 
@@ -143,21 +143,21 @@ jobs:
             </div>"
 
             COVER_PAGE="${LOGO_HEADER}
-<div style=\"height:120px;\"></div>
-<h1 style=\"text-align:center;font-size:32pt;font-weight:bold;margin-bottom:40px;\">$IFLOW_NAME</h1>
-<div style=\"text-align:center;\">
-<table style=\"width:55%;margin:0 auto;\">
-<tr><th>Author</th><td>$AUTHOR</td></tr>
-<tr><th>Date</th><td>$DATE</td></tr>
-<tr><th>Version</th><td>$VERSION</td></tr>
-</table>
-</div>"
+            <div style=\"height:120px;\"></div>
+            <h1 style=\"text-align:center;font-size:32pt;font-weight:bold;margin-bottom:40px;\">$IFLOW_NAME</h1>
+            <div style=\"text-align:center;\">
+            <table style=\"width:55%;margin:0 auto;\">
+            <tr><th>Author</th><td>$AUTHOR</td></tr>
+            <tr><th>Date</th><td>$DATE</td></tr>
+            <tr><th>Version</th><td>$VERSION</td></tr>
+            </table>
+            </div>"
 
             echo "${GLOBAL_STYLE}
-${COVER_PAGE}
-<div style=\"page-break-after: always;\"></div>
+            ${COVER_PAGE}
+            <div style=\"page-break-after: always;\"></div>
 
-${GENERATED_TEXT}" > "$TEMP_MD"
+            ${GENERATED_TEXT}" > "$TEMP_MD"
 
             pandoc "$TEMP_MD" -o "$OUTPUT_DOCX"
 
