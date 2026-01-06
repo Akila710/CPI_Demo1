@@ -214,7 +214,7 @@ jobs:
               right_p.add_run().add_picture(img(MM), width=Inches(1.4))
 
               d.save(f)
-              PYCODE
+          PYCODE
 
       - name: Commit and Push
         if: steps.documentation_step.outputs.docs_generated == 'true'
