@@ -193,7 +193,7 @@ jobs:
 
               # Clear existing header content safely
               for p in header.paragraphs:
-              p._element.getparent().remove(p._element)
+                  p._element.getparent().remove(p._element)
 
               # CRITICAL FIX: width is mandatory in header/footer tables
               table = header.add_table(
