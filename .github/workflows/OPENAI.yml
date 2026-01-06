@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: CPI Integration Package ID
+        description: "The ID of the CPI Integration Package (e.g., 'Demo')."
         required: true
         type: string
 
@@ -15,18 +15,31 @@ jobs:
       contents: write
 
     steps:
+      # ------------------------------------------------------------
+      # 1️⃣ Checkout
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ------------------------------------------------------------
+      # 2️⃣ Install dependencies (FIXED xcolor issue)
+      # ------------------------------------------------------------
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq pandoc texlive-latex-base
+          sudo apt-get install -y \
+            jq \
+            pandoc \
+            texlive-latex-extra
 
-      # ✅ CREATE HEADER HTML (LOGOS ON EVERY PAGE)
-      - name: Create Header HTML
+      # ------------------------------------------------------------
+      # 3️⃣ Create INLINE HTML + CSS (no external files needed)
+      # ------------------------------------------------------------
+      - name: Create Pandoc Assets (Header, Cover, TOC CSS)
         run: |
           mkdir -p pandoc_assets
+
+          # 🔹 HEADER (logos on EVERY page)
           cat <<'EOF' > pandoc_assets/header.html
           <style>
           @page {
@@ -58,9 +71,7 @@ jobs:
           </header>
           EOF
 
-      # ✅ CREATE COVER PAGE (PAGE 1)
-      - name: Create Cover HTML
-        run: |
+          # 🔹 COVER PAGE (PAGE 1)
           cat <<'EOF' > pandoc_assets/cover.html
           <div style="text-align:center; margin-top:200px;">
             <h1 style="font-size:42px;">{{IFLOW_NAME}}</h1>
@@ -78,9 +89,7 @@ jobs:
           <div style="page-break-after: always;"></div>
           EOF
 
-      # ✅ CREATE TOC CSS (PAGE 2 ONLY)
-      - name: Create TOC CSS
-        run: |
+          # 🔹 TOC CSS (PAGE 2 ONLY)
           cat <<'EOF' > pandoc_assets/toc.css
           #TOC {
             page-break-after: always;
@@ -90,7 +99,9 @@ jobs:
           }
           EOF
 
-      # ✅ GENERATE PDF
+      # ------------------------------------------------------------
+      # 4️⃣ Generate PDF (Cover → TOC → Content)
+      # ------------------------------------------------------------
       - name: Generate PDF Documentation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -102,6 +113,8 @@ jobs:
           MODEL_NAME="gpt-4o-mini"
           BASE_DIR="cpi-artifacts/$PKG_ID"
 
+          [ -d "$BASE_DIR" ] || { echo "::error::Package not found"; exit 1; }
+
           for IFLOW_DIR in "$BASE_DIR"/*; do
             IFLOW_NAME=$(basename "$IFLOW_DIR")
             OUTPUT_PDF="$IFLOW_DIR/${IFLOW_NAME}.pdf"
@@ -110,15 +123,16 @@ jobs:
             DATE=$(date +%Y-%m-%d)
             VERSION="Draft"
 
-            # 🔹 Call OpenAI (HTML only, no logos)
+            # 🔹 OpenAI request (HTML only, NO logos)
             jq -n \
               --arg model "$MODEL_NAME" \
-              --arg system "Generate HTML documentation. No logos. Proper headings only." \
-              --arg user "Generate documentation for iFlow $IFLOW_NAME." \
-              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$user}]}' \
+              --arg system "Generate clean HTML documentation. No logos. Use proper headings and tables." \
+              --arg user "Generate technical documentation for iFlow $IFLOW_NAME." \
+              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$user}],temperature:0.1}' \
               > payload.json
 
-            RESPONSE=$(curl -s -H "Authorization: Bearer $OPENAI_API_KEY" \
+            RESPONSE=$(curl -s \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
               -H "Content-Type: application/json" \
               -d @payload.json "$API_URL")
 
@@ -131,7 +145,7 @@ jobs:
                 -e "s/{{VERSION}}/$VERSION/" \
                 pandoc_assets/cover.html > cover_final.html
 
-            # 🔹 Build final PDF
+            # 🔹 Build FINAL PDF
             pandoc cover_final.html content.html \
               --toc \
               --toc-depth=3 \
@@ -142,10 +156,13 @@ jobs:
             rm -f payload.json content.html cover_final.html
           done
 
+      # ------------------------------------------------------------
+      # 5️⃣ Commit & Push PDFs
+      # ------------------------------------------------------------
       - name: Commit and Push PDFs
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add cpi-artifacts/${{ github.event.inputs.package_id }}/*.pdf
-          git commit -m "🤖 DOCS: PDF with cover, TOC, repeating logos (inline HTML/CSS)"
+          git commit -m "🤖 DOCS: PDF with cover, TOC, repeating logos"
           git push
