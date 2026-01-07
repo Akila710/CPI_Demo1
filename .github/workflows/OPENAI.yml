@@ -1,10 +1,9 @@
-name: 🤖 Generation Individual iFlow Documentation (PDF)
-
+name: 🤖 Generation Individual iFlow Documentation (DOCX)
 on:
   workflow_dispatch:
     inputs:
       package_id:
-        description: "The ID of the CPI Integration Package (e.g., 'Demo')."
+        description: "The ID of the CPI Integration Package (e.g., 'Demo')"
         required: true
         type: string
 
@@ -13,166 +12,104 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
-      # ------------------------------------------------------------
-      # 1️⃣ Checkout repository
-      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # 2️⃣ Install Dependencies (NO LaTeX)
-      # ------------------------------------------------------------
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq wkhtmltopdf
+          pip3 install python-docx requests
 
-      # ------------------------------------------------------------
-      # 3️⃣ Create INLINE HTML Assets (HEADER + COVER)
-      # ------------------------------------------------------------
-      - name: Create HTML Assets
-        run: |
-          mkdir -p pdf_assets
-
-          # ✅ USE RAW GITHUB IMAGE URLS (CRITICAL FIX)
-          SAP_LOGO="https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/SAP.jpg"
-          MM_LOGO="https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/mm_logo.png"
-
-          # ==========================================================
-          # HEADER HTML (FULL HTML — REPEATS ON EVERY PAGE)
-          # ==========================================================
-          cat <<EOF > pdf_assets/header.html
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="UTF-8">
-            <style>
-              body {
-                margin: 0;
-                padding: 0;
-                font-size: 10px;
-              }
-              table {
-                width: 100%;
-                border-bottom: 1px solid #ccc;
-              }
-              img {
-                height: 40px;
-              }
-            </style>
-          </head>
-          <body>
-            <table>
-              <tr>
-                <td align="left">
-                  <img src="${SAP_LOGO}">
-                </td>
-                <td align="right">
-                  <img src="${MM_LOGO}">
-                </td>
-              </tr>
-            </table>
-          </body>
-          </html>
-          EOF
-
-          # ==========================================================
-          # COVER PAGE (PAGE 1)
-          # ==========================================================
-          cat <<'EOF' > pdf_assets/cover.html
-          <!DOCTYPE html>
-          <html>
-          <body>
-            <div style="text-align:center; margin-top:200px;">
-              <h1 style="font-size:42px;">{{IFLOW_NAME}}</h1>
-              <h2>Technical Specification Document</h2>
-
-              <div style="margin-top:120px;">
-                <table border="1" cellpadding="8" cellspacing="0"
-                       align="center" width="60%">
-                  <tr><th align="left">Author</th><td>{{AUTHOR}}</td></tr>
-                  <tr><th align="left">Date</th><td>{{DATE}}</td></tr>
-                  <tr><th align="left">Version</th><td>{{VERSION}}</td></tr>
-                </table>
-              </div>
-            </div>
-
-            <div style="page-break-after: always;"></div>
-          </body>
-          </html>
-          EOF
-
-      # ------------------------------------------------------------
-      # 4️⃣ Generate PDF (wkhtmltopdf – LOGOS ON EVERY PAGE)
-      # ------------------------------------------------------------
-      - name: Generate PDF Documentation
+      - name: Generate DOCX Documentation
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          set -e
+          # 1️⃣ CREATE THE PYTHON SCRIPT ON THE FLY
+          cat << 'EOF' > generate_docx.py
+          import sys, requests, os
+          from docx import Document
+          from docx.shared import Inches, Pt
+          from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-          API_URL="https://api.openai.com/v1/chat/completions"
-          MODEL_NAME="gpt-4o-mini"
+          def build_docx(iflow_name, author, date, ai_text, output_path):
+              doc = Document()
+              
+              # --- Setup Header (Repeats on every page) ---
+              section = doc.sections[0]
+              header = section.header
+              htable = header.add_table(1, 2, width=Inches(6))
+              
+              # Download Logos
+              sap_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/SAP.jpg"
+              mm_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/mm_logo.png"
+              
+              with open("sap.jpg", "wb") as f: f.write(requests.get(sap_url).content)
+              with open("mm.png", "wb") as f: f.write(requests.get(mm_url).content)
+
+              # Left Logo (SAP)
+              sap_run = htable.rows[0].cells[0].paragraphs[0].add_run()
+              sap_run.add_picture("sap.jpg", height=Inches(0.4))
+              
+              # Right Logo (MM)
+              mm_para = htable.rows[0].cells[1].paragraphs[0]
+              mm_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+              mm_run = mm_para.add_run()
+              mm_run.add_picture("mm.png", height=Inches(0.4))
+
+              # --- Cover Page ---
+              doc.add_heading(iflow_name, 0)
+              doc.add_paragraph("Technical Specification Document").alignment = WD_ALIGN_PARAGRAPH.CENTER
+              
+              table = doc.add_table(rows=3, cols=2)
+              table.style = 'Table Grid'
+              data = [("Author", author), ("Date", date), ("Version", "1.0")]
+              for i, (label, val) in enumerate(data):
+                  table.rows[i].cells[0].text = label
+                  table.rows[i].cells[1].text = val
+              
+              doc.add_page_break()
+
+              # --- Content Page ---
+              doc.add_heading("Functional & Technical Overview", level=1)
+              doc.add_paragraph(ai_text)
+              
+              doc.save(output_path)
+          
+          if __name__ == "__main__":
+              build_docx(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+          EOF
+
+          # 2️⃣ LOOP THROUGH IFLOWS AND CALL THE SCRIPT
           BASE_DIR="cpi-artifacts/$PKG_ID"
-
-          [ -d "$BASE_DIR" ] || { echo "::error::Package not found"; exit 1; }
-
           for IFLOW_DIR in "$BASE_DIR"/*; do
-            IFLOW_NAME=$(basename "$IFLOW_DIR")
-            OUTPUT_PDF="$IFLOW_DIR/${IFLOW_NAME}.pdf"
-
-            AUTHOR=$(git log -1 --pretty=format:'%an')
-            DATE=$(date +%Y-%m-%d)
-            VERSION="1.0"
-
-            # ------------------------------------------------------
-            # OpenAI request – STRICT HTML ONLY
-            # ------------------------------------------------------
-            jq -n \
-              --arg model "$MODEL_NAME" \
-              --arg system "Generate STRICT HTML only. No markdown. No backticks. Use h1,h2,p,ul,li,table,tr,td,th only." \
-              --arg user "Generate technical documentation for iFlow $IFLOW_NAME." \
-              '{model:$model,messages:[{role:"system",content:$system},{role:"user",content:$user}],temperature:0.1}' \
-              > payload.json
-
-            RESPONSE=$(curl -s \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -H "Content-Type: application/json" \
-              -d @payload.json "$API_URL")
-
-            # ------------------------------------------------------
-            # Build FINAL HTML (Cover + Content)
-            # ------------------------------------------------------
-            sed -e "s/{{IFLOW_NAME}}/$IFLOW_NAME/" \
-                -e "s/{{AUTHOR}}/$AUTHOR/" \
-                -e "s/{{DATE}}/$DATE/" \
-                -e "s/{{VERSION}}/$VERSION/" \
-                pdf_assets/cover.html > final.html
-
-            echo "$RESPONSE" | jq -r '.choices[0].message.content' >> final.html
-
-            # ------------------------------------------------------
-            # Convert to PDF (HEADER ON EVERY PAGE)
-            # ------------------------------------------------------
-            wkhtmltopdf \
-              --header-html pdf_assets/header.html \
-              --header-spacing 5 \
-              --margin-top 30mm \
-              final.html "$OUTPUT_PDF"
-
-            rm -f payload.json final.html
+            if [ -d "$IFLOW_DIR" ]; then
+              IFLOW_NAME=$(basename "$IFLOW_DIR")
+              AUTHOR=$(git log -1 --pretty=format:'%an' || echo "GitHub Action")
+              DATE=$(date +%Y-%m-%d)
+              
+              # Get Documentation from OpenAI
+              RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"model\": \"gpt-4o-mini\",
+                  \"messages\": [{\"role\": \"system\", \"content\": \"You are a technical writer.\"}, 
+                                {\"role\": \"user\", \"content\": \"Generate technical documentation for CPI iFlow: $IFLOW_NAME\"}]
+                }")
+              
+              AI_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+              
+              # Run the generated Python script
+              python3 generate_docx.py "$IFLOW_NAME" "$AUTHOR" "$DATE" "$AI_CONTENT" "$IFLOW_DIR/${IFLOW_NAME}.docx"
+            fi
           done
 
-      # ------------------------------------------------------------
-      # 5️⃣ Commit & Push PDFs
-      # ------------------------------------------------------------
-      - name: Commit and Push PDFs
+      - name: Commit and Push
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add cpi-artifacts/${{ github.event.inputs.package_id }}/*.pdf
-          git commit -m "🤖 DOCS: PDF with logos on every page"
+          git add cpi-artifacts/${{ github.event.inputs.package_id }}/*.docx
+          git commit -m "🤖 DOCS: Generated Word files with headers" || echo "No changes to commit"
           git push
