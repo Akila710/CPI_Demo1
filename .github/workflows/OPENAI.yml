@@ -30,8 +30,10 @@ jobs:
           cat << 'EOF' > generate_docx.py
           import sys, requests, os
           from docx import Document
-          from docx.shared import Inches, Pt
+          from docx.shared import Inches, Pt, RGBColor
           from docx.enum.text import WD_ALIGN_PARAGRAPH
+          from docx.oxml.ns import qn
+          from docx.oxml import OxmlElement
 
           def build_docx(iflow_name, author, date, ai_text, output_path):
               doc = Document()
@@ -39,31 +41,62 @@ jobs:
               # --- Setup Header (Repeats on every page) ---
               section = doc.sections[0]
               header = section.header
-              htable = header.add_table(1, 2, width=Inches(6))
+              
+              # Increase width to accommodate larger logos
+              htable = header.add_table(1, 2, width=Inches(6.5))
+              htable.allow_autofit = False
               
               # Download Logos
               sap_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/SAP.jpg"
               mm_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/mm_logo.png"
               
-              with open("sap.jpg", "wb") as f: f.write(requests.get(sap_url).content)
-              with open("mm.png", "wb") as f: f.write(requests.get(mm_url).content)
+              try:
+                  with open("sap.jpg", "wb") as f: f.write(requests.get(sap_url).content)
+                  with open("mm.png", "wb") as f: f.write(requests.get(mm_url).content)
 
-              # Left Logo (SAP)
-              sap_run = htable.rows[0].cells[0].paragraphs[0].add_run()
-              sap_run.add_picture("sap.jpg", height=Inches(0.4))
-              
-              # Right Logo (MM)
-              mm_para = htable.rows[0].cells[1].paragraphs[0]
-              mm_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-              mm_run = mm_para.add_run()
-              mm_run.add_picture("mm.png", height=Inches(0.4))
+                  # Left Logo (SAP) - Size increased to 0.6
+                  sap_run = htable.rows[0].cells[0].paragraphs[0].add_run()
+                  sap_run.add_picture("sap.jpg", height=Inches(0.6))
+                  
+                  # Right Logo (MM) - Size increased to 0.6
+                  mm_para = htable.rows[0].cells[1].paragraphs[0]
+                  mm_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                  mm_run = mm_para.add_run()
+                  mm_run.add_picture("mm.png", height=Inches(0.6))
+              except:
+                  pass # Fallback if images fail to download
 
               # --- Cover Page ---
-              doc.add_heading(iflow_name, 0)
+              # Add spacing to move title down
+              for _ in range(3): doc.add_paragraph()
+
+              # Centered iFlow Name
+              title_para = doc.add_paragraph()
+              title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+              run = title_para.add_run(iflow_name)
+              run.font.size = Pt(36)
+              run.font.color.rgb = RGBColor(31, 56, 100) # Dark Blue
+
+              # Add Horizontal Line (Border)
+              p = doc.add_paragraph()
+              p_element = p._element
+              pPr = p_element.get_or_add_pPr()
+              pBdr = OxmlElement('w:pBdr')
+              bottom = OxmlElement('w:bottom')
+              bottom.set(qn('w:val'), 'single')
+              bottom.set(qn('w:sz'), '12')
+              bottom.set(qn('w:space'), '1')
+              bottom.set(qn('w:color'), '4F81BD')
+              pBdr.append(bottom)
+              pPr.append(pBdr)
+
               doc.add_paragraph("Technical Specification Document").alignment = WD_ALIGN_PARAGRAPH.CENTER
               
+              # Centered Info Table
               table = doc.add_table(rows=3, cols=2)
               table.style = 'Table Grid'
+              table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+              
               data = [("Author", author), ("Date", date), ("Version", "1.0")]
               for i, (label, val) in enumerate(data):
                   table.rows[i].cells[0].text = label
@@ -81,7 +114,7 @@ jobs:
               build_docx(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
           EOF
 
-          # 2️⃣ LOOP THROUGH IFLOWS AND CALL THE SCRIPT
+          # 2️⃣ EXECUTION
           BASE_DIR="cpi-artifacts/$PKG_ID"
           for IFLOW_DIR in "$BASE_DIR"/*; do
             if [ -d "$IFLOW_DIR" ]; then
@@ -89,19 +122,15 @@ jobs:
               AUTHOR=$(git log -1 --pretty=format:'%an' || echo "GitHub Action")
               DATE=$(date +%Y-%m-%d)
               
-              # Get Documentation from OpenAI
               RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
                 -H "Authorization: Bearer $OPENAI_API_KEY" \
                 -H "Content-Type: application/json" \
                 -d "{
                   \"model\": \"gpt-4o-mini\",
-                  \"messages\": [{\"role\": \"system\", \"content\": \"You are a technical writer.\"}, 
-                                {\"role\": \"user\", \"content\": \"Generate technical documentation for CPI iFlow: $IFLOW_NAME\"}]
+                  \"messages\": [{\"role\": \"user\", \"content\": \"Write technical documentation for $IFLOW_NAME.\"}]
                 }")
               
               AI_CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-              
-              # Run the generated Python script
               python3 generate_docx.py "$IFLOW_NAME" "$AUTHOR" "$DATE" "$AI_CONTENT" "$IFLOW_DIR/${IFLOW_NAME}.docx"
             fi
           done
@@ -111,5 +140,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add cpi-artifacts/${{ github.event.inputs.package_id }}/*.docx
-          git commit -m "🤖 DOCS: Generated Word files with headers" || echo "No changes to commit"
+          git commit -m "🤖 DOCS: Formatted Word files with centered titles" || echo "No changes"
           git push
