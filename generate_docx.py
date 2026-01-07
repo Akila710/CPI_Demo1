@@ -1,0 +1,121 @@
+import sys, requests, os
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+def add_numbered_heading(doc, text, level, num_str):
+    """Helper to add properly formatted numbered headings (e.g. 1.1 Purpose)"""
+    p = doc.add_heading(level=level)
+    run = p.add_run(f"{num_str} {text}")
+    if level == 1:
+        run.font.size = Pt(16)
+        run.font.color.rgb = RGBColor(31, 56, 100)
+    else:
+        run.font.size = Pt(13)
+        run.font.color.rgb = RGBColor(46, 84, 150)
+
+def build_docx(iflow_name, author, date, ai_text, output_path):
+    doc = Document()
+    
+    # --- HEADER SETUP (ALL PAGES) ---
+    section = doc.sections[0]
+    header = section.header
+    htable = header.add_table(1, 2, width=Inches(6.5))
+    htable.allow_autofit = False
+    
+    # Download Logos (Increased size to 0.75 for clarity)
+    sap_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/SAP.jpg"
+    mm_url = "https://raw.githubusercontent.com/Akila710/CPI_Demo1/main/assets/logos/mm_logo.png"
+    try:
+        with open("sap.jpg", "wb") as f: f.write(requests.get(sap_url).content)
+        with open("mm.png", "wb") as f: f.write(requests.get(mm_url).content)
+        htable.rows[0].cells[0].paragraphs[0].add_run().add_picture("sap.jpg", height=Inches(0.75))
+        mm_para = htable.rows[0].cells[1].paragraphs[0]
+        mm_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        mm_para.add_run().add_picture("mm.png", height=Inches(0.75))
+    except: pass
+
+    # --- PAGE 1: COVER PAGE ---
+    for _ in range(4): doc.add_paragraph()
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = title_para.add_run(iflow_name)
+    run.font.size = Pt(36)
+    run.font.bold = True
+    run.font.color.rgb = RGBColor(31, 56, 100)
+
+    doc.add_paragraph("Technical Specification Document").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph("\n" * 2)
+
+    meta_table = doc.add_table(rows=3, cols=2)
+    meta_table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta_table.style = 'Table Grid'
+    meta_data = [("Author:", author), ("Date:", date), ("Version:", "1.0 (Draft)")]
+    for i, (lbl, val) in enumerate(meta_data):
+        meta_table.rows[i].cells[0].text = lbl
+        meta_table.rows[i].cells[1].text = val
+    
+    doc.add_page_break()
+
+    # --- PAGE 2: TABLE OF CONTENTS & REVISION HISTORY ---
+    doc.add_heading("Table of Contents", level=1)
+    toc_items = [
+        "1. Introduction", "  1.1 Purpose", "  1.2 Scope",
+        "2. Integration Overview", "  2.1 Integration Architecture", "  2.2 Integration Components",
+        "3. Integration Scenarios", "  3.1 Scenario Description", "  3.2 Data Flows", "  3.3 Security Requirements",
+        "4. Error Handling and Logging", "5. Testing Validation"
+    ]
+    for item in toc_items:
+        p = doc.add_paragraph(item)
+        p.paragraph_format.left_indent = Inches(0.2) if item.startswith("  ") else Inches(0)
+
+    doc.add_paragraph("\n")
+    doc.add_heading("Revision History", level=1)
+    rev_table = doc.add_table(rows=2, cols=4)
+    rev_table.style = 'Table Grid'
+    rev_headers = ["Version", "Change Description", "Date", "Author"]
+    for i, h in enumerate(rev_headers): rev_table.rows[0].cells[i].text = h
+    rev_table.rows[1].cells[0].text = "1.0"
+    rev_table.rows[1].cells[1].text = "Initial Technical Specification"
+    rev_table.rows[1].cells[2].text = date
+    rev_table.rows[1].cells[3].text = author
+
+    doc.add_page_break()
+
+    # --- PAGE 3: SIGN OFF & REFERENCES ---
+    doc.add_heading("Sign off - Technical Specification", level=1)
+    sign_table = doc.add_table(rows=2, cols=4)
+    sign_table.style = 'Table Grid'
+    s_headers = ["Prepared By", "Date", "Approved By", "Date"]
+    for i, h in enumerate(s_headers): sign_table.rows[0].cells[i].text = h
+    
+    doc.add_paragraph("\n")
+    doc.add_heading("References", level=1)
+    doc.add_paragraph("1. Solution Architecture Document\n2. Interface Mapping Sheet")
+    
+    doc.add_page_break()
+
+    # --- PAGE 4+: ACTUAL CONTENT (Formatted according to TOC) ---
+    # Section 1
+    add_numbered_heading(doc, "Introduction", 1, "1.")
+    add_numbered_heading(doc, "Purpose", 2, "1.1")
+    doc.add_paragraph("This document provides a detailed explanation of the solution conceptualized for " + iflow_name + ".")
+    add_numbered_heading(doc, "Scope", 2, "1.2")
+    doc.add_paragraph("This technical specification outlines the data flows and mapping rules required for the integration.")
+
+    # Section 2
+    add_numbered_heading(doc, "Integration Overview", 1, "2.")
+    add_numbered_heading(doc, "Integration Architecture", 2, "2.1")
+    doc.add_paragraph("The technical architecture follows the standard SAP BTP Cloud Integration pattern.")
+
+    # Section 3 (The AI Content)
+    add_numbered_heading(doc, "Integration Scenarios", 1, "3.")
+    add_numbered_heading(doc, "Scenario Description", 2, "3.1")
+    doc.add_paragraph(ai_text)
+    
+    doc.save(output_path)
+
+if __name__ == "__main__":
+    build_docx(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
