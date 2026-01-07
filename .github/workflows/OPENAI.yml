@@ -26,7 +26,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PKG_ID: ${{ github.event.inputs.package_id }}
         run: |
-          # 1️⃣ THE PYTHON ENGINE (Handles Sections, Tables, and Diagrams)
+          # 1️⃣ THE REPAIRED PYTHON ENGINE
           cat << 'EOF' > generate_docx.py
           import sys, requests, os, json, base64
           from docx import Document
@@ -39,10 +39,18 @@ jobs:
               run.font.color.rgb = RGBColor(31, 56, 100)
               run.font.size = Pt(16) if level == 1 else Pt(13)
 
+          def safe_add_text(doc, data):
+              """Ensures dictionaries or lists are converted to string before adding to paragraph"""
+              if isinstance(data, (dict, list)):
+                  text = json.dumps(data, indent=2)
+              else:
+                  text = str(data)
+              doc.add_paragraph(text)
+
           def build_docx(iflow_name, author, date, ai_data, output_path):
               doc = Document()
               
-              # HEADER LOGOS
+              # --- HEADER LOGOS ---
               section = doc.sections[0]
               header = section.header
               htable = header.add_table(1, 2, width=Inches(6.5))
@@ -57,7 +65,7 @@ jobs:
                   mm_p.add_run().add_picture("mm.png", height=Inches(0.75))
               except: pass
 
-              # PAGE 1: COVER
+              # --- PAGE 1: COVER ---
               for _ in range(5): doc.add_paragraph()
               title_p = doc.add_paragraph()
               title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -71,7 +79,7 @@ jobs:
                   meta.rows[i].cells[0].text = l; meta.rows[i].cells[1].text = v
               doc.add_page_break()
 
-              # PAGE 2: TOC
+              # --- PAGE 2: TOC ---
               doc.add_heading("Table of Contents", level=1)
               toc = ["1. Introduction", "  1.1 Purpose", "  1.2 Scope", "2. Integration Overview", "  2.1 Integration Architecture", "  2.2 Integration Components", "3. Integration Scenarios", "  3.1 Scenario Description", "  3.2 Data Flows", "  3.3 Security Requirements", "4. Error Handling", "5. Testing Validation"]
               for item in toc:
@@ -79,19 +87,18 @@ jobs:
                   if item.startswith("  "): p.paragraph_format.left_indent = Inches(0.3)
               doc.add_page_break()
 
-              # PAGE 3+: DYNAMIC SECTIONS
-              # 1. Introduction
+              # --- PAGE 3+: DYNAMIC SECTIONS ---
               add_numbered_heading(doc, "Introduction", 1, "1.")
               add_numbered_heading(doc, "Purpose", 2, "1.1")
-              doc.add_paragraph(ai_data.get("purpose", ""))
+              safe_add_text(doc, ai_data.get("purpose", ""))
+              
               add_numbered_heading(doc, "Scope", 2, "1.2")
-              doc.add_paragraph(ai_data.get("scope", ""))
+              safe_add_text(doc, ai_data.get("scope", ""))
 
               # 2. Integration Overview & DIAGRAM
               add_numbered_heading(doc, "Integration Overview", 1, "2.")
               add_numbered_heading(doc, "Integration Architecture", 2, "2.1")
               
-              # GENERATE & INSERT DIAGRAM
               mermaid_code = ai_data.get("mermaid_diagram", "graph LR; Sender-->CPI; CPI-->Receiver;")
               graph_url = f"https://mermaid.ink/img/{base64.b64encode(mermaid_code.encode()).decode()}"
               try:
@@ -101,24 +108,50 @@ jobs:
               except: doc.add_paragraph("[Diagram Generation Failed]")
 
               add_numbered_heading(doc, "Integration Components", 2, "2.2")
-              doc.add_paragraph(ai_data.get("components", ""))
+              # Create a table for components
+              comp_data = ai_data.get("components", {})
+              if isinstance(comp_data, dict):
+                  c_table = doc.add_table(rows=1, cols=2)
+                  c_table.style = 'Table Grid'
+                  c_table.rows[0].cells[0].text = 'Component'
+                  c_table.rows[0].cells[1].text = 'Value'
+                  for k, v in comp_data.items():
+                      row = c_table.add_row().cells
+                      row[0].text = str(k)
+                      row[1].text = str(v)
+              else: safe_add_text(doc, comp_data)
 
               # 3. Integration Scenarios
               add_numbered_heading(doc, "Integration Scenarios", 1, "3.")
               add_numbered_heading(doc, "Scenario Description", 2, "3.1")
-              doc.add_paragraph(ai_data.get("scenario_description", ""))
+              safe_add_text(doc, ai_data.get("scenario_description", ""))
+              
               add_numbered_heading(doc, "Data Flows", 2, "3.2")
-              doc.add_paragraph(ai_data.get("data_flows", ""))
+              # Adding Mapping Table
+              map_data = ai_data.get("mapping", [])
+              if isinstance(map_data, list) and len(map_data) > 0:
+                  m_table = doc.add_table(rows=1, cols=3)
+                  m_table.style = 'Table Grid'
+                  m_table.rows[0].cells[0].text = 'Source Field'
+                  m_table.rows[0].cells[1].text = 'Target Field'
+                  m_table.rows[0].cells[2].text = 'Logic'
+                  for entry in map_data:
+                      row = m_table.add_row().cells
+                      row[0].text = str(entry.get("source", ""))
+                      row[1].text = str(entry.get("target", ""))
+                      row[2].text = str(entry.get("logic", ""))
+              else: safe_add_text(doc, ai_data.get("data_flows", ""))
+
               add_numbered_heading(doc, "Security Requirements", 2, "3.3")
-              doc.add_paragraph(ai_data.get("security", ""))
+              safe_add_text(doc, ai_data.get("security", ""))
 
               # 4. Error Handling
               add_numbered_heading(doc, "Error Handling and Logging", 1, "4.")
-              doc.add_paragraph(ai_data.get("error_handling", ""))
+              safe_add_text(doc, ai_data.get("error_handling", ""))
 
               # 5. Testing Validation
               add_numbered_heading(doc, "Testing Validation", 1, "5.")
-              doc.add_paragraph(ai_data.get("testing", ""))
+              safe_add_text(doc, ai_data.get("testing", ""))
 
               doc.save(output_path)
           
@@ -126,12 +159,12 @@ jobs:
               build_docx(sys.argv[1], sys.argv[2], sys.argv[3], json.loads(sys.argv[4]), sys.argv[5])
           EOF
 
-          # 2️⃣ DYNAMIC CONTENT GENERATION LOOP
+          # 2️⃣ DYNAMIC CONTENT GENERATION
           BASE_DIR="cpi-artifacts/$PKG_ID"
           for IFLOW_DIR in "$BASE_DIR"/*; do
             if [ -d "$IFLOW_DIR" ]; then
               IFLOW_NAME=$(basename "$IFLOW_DIR")
-              ARTIFACT_CONTEXT=$(find "$IFLOW_DIR" -maxdepth 2 -type f \( -name "*.iflow" -o -name "*.xml" -o -name "*.groovy" \) -exec head -n 50 {} + | tr -d '"' | tr -d '\n' | cut -c1-4000)
+              ARTIFACT_CONTEXT=$(find "$IFLOW_DIR" -maxdepth 2 -type f \( -name "*.iflow" -o -name "*.xml" -o -name "*.groovy" \) -exec head -n 60 {} + | tr -d '"' | tr -d '\n' | cut -c1-5000)
 
               AI_RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
                 -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -140,8 +173,8 @@ jobs:
                   \"model\": \"gpt-4o-mini\",
                   \"response_format\": { \"type\": \"json_object\" },
                   \"messages\": [
-                    {\"role\": \"system\", \"content\": \"You are a SAP CPI Architect. Generate a technical spec JSON with keys: purpose, scope, mermaid_diagram, components, scenario_description, data_flows, security, error_handling, testing. The mermaid_diagram must be a valid Mermaid.js string showing the flow between systems.\"},
-                    {\"role\": \"user\", \"content\": \"iFlow: $IFLOW_NAME. Artifacts: $ARTIFACT_CONTEXT\"}
+                    {\"role\": \"system\", \"content\": \"You are a SAP CPI Architect. Analyze artifacts and return JSON. Required keys: purpose, scope, mermaid_diagram, components (dict), scenario_description, data_flows, mapping (list of dicts with source, target, logic), security, error_handling, testing.\"},
+                    {\"role\": \"user\", \"content\": \"iFlow: $IFLOW_NAME. Artifact Context: $ARTIFACT_CONTEXT\"}
                   ]
                 }")
               
@@ -158,5 +191,5 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add .
-          git commit -m "🤖 DOCS: Full Dynamic Spec with AI-Generated Architecture Diagrams" || echo "No changes"
+          git commit -m "🤖 DOCS: Fixed formatting and added dynamic mapping tables" || echo "No changes"
           git push
